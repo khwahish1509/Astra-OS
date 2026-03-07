@@ -1,0 +1,82 @@
+# ─────────────────────────────────────────────────────────────────
+# AstraCoach — Google Cloud Build Configuration
+# Builds Docker image, pushes to Artifact Registry, deploys to Cloud Run
+#
+# One-time setup:
+#   gcloud services enable cloudbuild.googleapis.com run.googleapis.com \
+#     secretmanager.googleapis.com artifactregistry.googleapis.com
+#   gcloud artifacts repositories create astracoach \
+#     --repository-format=docker --location=us-central1
+#   echo -n "your-key" | gcloud secrets create GOOGLE_API_KEY --data-file=-
+#
+# Deploy:
+#   gcloud builds submit --config cloudbuild.yaml .
+# ─────────────────────────────────────────────────────────────────
+
+substitutions:
+  _SERVICE:  astracoach
+  _REGION:   us-central1
+  _REPO:     us-central1-docker.pkg.dev/$PROJECT_ID/astracoach/astracoach
+
+steps:
+  # ── 1. Build image ────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build
+    args:
+      - build
+      - --tag
+      - '${_REPO}:$COMMIT_SHA'
+      - --tag
+      - '${_REPO}:latest'
+      - --build-arg
+      - 'VITE_BACKEND_URL=https://${_SERVICE}-$_SHORT_SHA-uc.a.run.app'
+      - --cache-from
+      - '${_REPO}:latest'
+      - .
+
+  # ── 2. Push ───────────────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push
+    args: [push, '--all-tags', '${_REPO}']
+
+  # ── 3. Deploy to Cloud Run ────────────────────────────────────
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - '${_SERVICE}'
+      - --image
+      - '${_REPO}:$COMMIT_SHA'
+      - --region
+      - '${_REGION}'
+      - --platform
+      - managed
+      - --allow-unauthenticated
+      - --memory
+      - 1Gi
+      - --cpu
+      - '2'
+      - --min-instances
+      - '1'        # stay warm — critical for real-time WebSocket sessions
+      - --max-instances
+      - '20'
+      - --port
+      - '8080'
+      - --timeout
+      - '3600'     # 1-hour session timeout
+      - --set-secrets
+      - 'GOOGLE_API_KEY=GOOGLE_API_KEY:latest'
+      - --set-env-vars
+      - 'ENV=production,GEMINI_MODEL=gemini-2.5-flash-preview-native-audio-12-2025'
+
+images:
+  - '${_REPO}:$COMMIT_SHA'
+  - '${_REPO}:latest'
+
+timeout: '1800s'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
