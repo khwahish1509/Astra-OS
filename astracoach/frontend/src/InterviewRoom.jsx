@@ -39,6 +39,7 @@ export default function InterviewRoom({ session, onEnd }) {
   const audio = useAudioPipeline({
     onPcmChunk: (buf) => iv.sendPcm(buf),
     onAmplitude: (amp) => setAudioLevel(amp),
+    onSpeechStart: () => iv.onSpeechStart?.(),
   })
 
   // ── Interview session (WebSocket) ─────────────────────────
@@ -46,6 +47,8 @@ export default function InterviewRoom({ session, onEnd }) {
     sessionId: session_id,
     wsBaseUrl: backendUrl,
     onPcmReceived: (buf) => audio.playPcm(buf),
+    onInterrupted: () => audio.flushPcm(),
+    onResumeAudio: () => audio.resumePcm(),  // Re-open worklet gate after interruption
   })
 
   // Wire camera video element into session hook

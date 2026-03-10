@@ -18,8 +18,24 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     super();
     this._queue = [];     // Float32Array chunks waiting to play
     this._frameCount = 0;
+    this._flushed = false; // When true, discard incoming audio (interrupted)
 
     this.port.onmessage = (e) => {
+      if (e.data === 'flush') {
+        // Immediately clear buffer AND block new chunks until 'resume'
+        this._queue = [];
+        this._flushed = true;
+        return;
+      }
+      if (e.data === 'resume') {
+        // Agent is allowed to speak again
+        this._flushed = false;
+        return;
+      }
+
+      // Discard incoming chunks while in flushed/interrupted state
+      if (this._flushed) return;
+
       const int16 = new Int16Array(e.data);
       const float = new Float32Array(int16.length);
       for (let i = 0; i < int16.length; i++) {

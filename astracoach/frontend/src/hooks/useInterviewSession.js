@@ -24,17 +24,27 @@ export function useInterviewSession({
   wsBaseUrl,
   onPcmReceived,
   onAmplitudeFromServer,
+  onInterrupted,
+  onResumeAudio,
 }) {
-  const wsRef           = useRef(null)
-  const frameTimerRef   = useRef(null)
-  const videoRef        = useRef(null)   // set externally via setVideoRef
-  const canvasRef       = useRef(document.createElement('canvas'))
+  const wsRef = useRef(null)
+  const frameTimerRef = useRef(null)
+  const videoRef = useRef(null)   // set externally via setVideoRef
+  const canvasRef = useRef(document.createElement('canvas'))
 
-  const [wsState, setWsState]         = useState('idle')  // idle|connecting|ready|active|ended
+  const [wsState, setWsState] = useState('idle')  // idle|connecting|ready|active|ended
   const [avatarState, setAvatarState] = useState('idle')  // idle|listening|thinking|speaking
-  const [transcript, setTranscript]   = useState([])
-  const [activeTool, setActiveTool]   = useState(null)
-  const [error, setError]             = useState('')
+  const [transcript, setTranscript] = useState([])
+  const [activeTool, setActiveTool] = useState(null)
+  const [error, setError] = useState('')
+
+  // ── Callbacks ───────────────────────────────────────────────
+  const handleSpeechStart = useCallback(() => {
+    // If the websocket is open, send an explicit activity_start to interrupt the model
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'activity_start' }))
+    }
+  }, [])
 
   // ── Connect ───────────────────────────────────────────────────
   const connect = useCallback(() => {
@@ -70,7 +80,7 @@ export function useInterviewSession({
         try {
           const msg = JSON.parse(evt.data)
           _handleControl(msg)
-        } catch {/* ignore malformed */}
+        } catch {/* ignore malformed */ }
       }
     }
 
@@ -105,8 +115,16 @@ export function useInterviewSession({
         setAvatarState('listening')
         break
 
+      case 'interrupted':
+        onInterrupted?.()
+        break
+
       case 'status':
         setAvatarState(msg.state || 'idle')
+        // Re-open the audio worklet gate when agent is in listening state
+        if (msg.state === 'listening') {
+          onResumeAudio?.()
+        }
         break
 
       case 'transcript':
@@ -135,13 +153,13 @@ export function useInterviewSession({
 
   // ── Send camera frame ─────────────────────────────────────────
   const _sendCameraFrame = useCallback(() => {
-    const ws  = wsRef.current
+    const ws = wsRef.current
     const vid = videoRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN || !vid) return
     if (vid.readyState < 2) return  // not enough data
 
     const canvas = canvasRef.current
-    canvas.width  = 320
+    canvas.width = 320
     canvas.height = 240
     const ctx = canvas.getContext('2d')
     ctx.drawImage(vid, 0, 0, 320, 240)
@@ -189,5 +207,6 @@ export function useInterviewSession({
     transcript,
     activeTool,
     error,
+    onSpeechStart: handleSpeechStart
   }
 }

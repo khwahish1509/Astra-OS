@@ -279,6 +279,9 @@ async def interview_websocket(ws: WebSocket, session_id: str):
                     elif msg_type == "end_turn":
                         await bridge.push({"type": "end_turn"})
 
+                    elif msg_type == "activity_start":
+                        await bridge.push({"type": "activity_start"})
+
                     elif msg_type == "vision_inject":
                         # Frontend sends analysed vision note for injection
                         note = data.get("note", "")
