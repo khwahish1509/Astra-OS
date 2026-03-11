@@ -1,11 +1,11 @@
 """
-AstraCoach — FastAPI Server
+AstraAgent — FastAPI Server
 ============================
-100% Google-native AI Interview Coach.
-No third-party avatar services. Gemini Live IS the voice.
+100% Google-native Universal AI Agent Platform.
+Give it any persona via system prompt — Gemini Live IS the voice.
 
 Key endpoints:
-  POST /api/session/create     — create interview session
+  POST /api/session/create     — create agent session (persona_name + system_prompt)
   GET  /api/session/{id}       — get session state + transcript
   POST /api/session/{id}/end   — tear down session
   WS   /ws/interview/{id}      — THE main audio/vision bridge
@@ -47,15 +47,15 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 AstraCoach starting...")
+    print("🚀 AstraAgent starting...")
     print(f"   Model: {os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-native-audio-latest')}")
     yield
-    print("AstraCoach shutting down.")
+    print("AstraAgent shutting down.")
 
 
 app = FastAPI(
-    title="AstraCoach API",
-    description="AI Interview Coach powered 100% by Google Gemini Live + ADK. No third-party services.",
+    title="AstraAgent API",
+    description="Universal AI Agent Platform powered 100% by Google Gemini Live + ADK. Any persona, any purpose.",
     version="2.0.0",
     lifespan=lifespan,
 )
@@ -259,18 +259,14 @@ async def interview_websocket(ws: WebSocket, session_id: str):
                         await ws.send_text(json.dumps({"type": "pong"}))
 
                     elif msg_type == "frame":
-                        # Camera frame — decode base64 → bytes
+                        # Camera frame — decode base64 JPEG → bytes and forward every frame
                         raw = data.get("data", "")
                         if raw:
                             jpeg_bytes = base64.b64decode(raw)
-                            # Inject vision context into text turn
-                            vision_note = store.get_vision(session_id)
-                            if not vision_note:
-                                # Trigger vision analysis via the frame
-                                await bridge.push({
-                                    "type": "frame",
-                                    "data": jpeg_bytes,
-                                })
+                            await bridge.push({
+                                "type": "frame",
+                                "data": jpeg_bytes,
+                            })
                             store.update_vision(session_id, "frame received")
 
                     elif msg_type == "text":
@@ -281,6 +277,9 @@ async def interview_websocket(ws: WebSocket, session_id: str):
 
                     elif msg_type == "activity_start":
                         await bridge.push({"type": "activity_start"})
+
+                    elif msg_type == "activity_end":
+                        await bridge.push({"type": "activity_end"})
 
                     elif msg_type == "vision_inject":
                         # Frontend sends analysed vision note for injection
@@ -320,7 +319,7 @@ async def interview_websocket(ws: WebSocket, session_id: str):
 async def health():
     return {
         "status": "ok",
-        "service": "AstraCoach",
+        "service": "AstraAgent",
         "version": "2.0.0",
         "active_sessions": store.active_count(),
         "active_bridges": len(active_bridges),
@@ -330,8 +329,8 @@ async def health():
 @app.get("/api/info")
 async def info():
     return {
-        "service": "AstraCoach — AI Interview Coach",
-        "description": "100% Google: Gemini 2.5 Flash Native Audio + ADK + Cloud Run",
+        "service": "AstraAgent — Universal AI Agent Platform",
+        "description": "100% Google: Gemini 2.5 Flash Native Audio + ADK + Cloud Run. Any persona, any purpose.",
         "model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest"),
         "docs": "/docs",
     }

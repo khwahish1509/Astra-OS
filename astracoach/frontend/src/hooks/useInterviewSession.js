@@ -16,7 +16,7 @@
 
 import { useRef, useState, useCallback, useEffect } from 'react'
 
-const FRAME_SEND_INTERVAL_MS = 3000   // camera frame every 3s
+const FRAME_SEND_INTERVAL_MS = 1000   // camera frame every 1s
 const MAX_TRANSCRIPT_ENTRIES = 60
 
 export function useInterviewSession({
@@ -43,6 +43,13 @@ export function useInterviewSession({
     // If the websocket is open, send an explicit activity_start to interrupt the model
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'activity_start' }))
+    }
+  }, [])
+
+  const handleSpeechEnd = useCallback(() => {
+    // If the websocket is open, send an explicit activity_end to signal the end of speech
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'activity_end' }))
     }
   }, [])
 
@@ -207,6 +214,7 @@ export function useInterviewSession({
     transcript,
     activeTool,
     error,
-    onSpeechStart: handleSpeechStart
+    onSpeechStart: handleSpeechStart,
+    onSpeechEnd: handleSpeechEnd
   }
 }

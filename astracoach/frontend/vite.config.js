@@ -3,6 +3,10 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  // Read .env from the project root (astracoach/) so frontend and backend
+  // share a single .env file. Without this Vite only looks in frontend/
+  // and misses VITE_SIMLI_API_KEY and other VITE_ vars.
+  envDir: '..',
   server: {
     port: 5173,
     proxy: {

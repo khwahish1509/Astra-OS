@@ -118,6 +118,9 @@ class GeminiLiveBridge:
             # NOTE: speech_config NOT supported for native audio models (causes 1008)
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
+            ),
             save_live_blob=True, # Critical: Required for ADK to flush and yield interruption events
         )
 
@@ -178,8 +181,20 @@ class GeminiLiveBridge:
                     print("🎤 [VAD] Client-side Voice Activity Detected! Sending explicit activity_start...", flush=True)
                     self._q.send_activity_start()
 
-                # Frame/text/end_turn are intentionally not forwarded
-                # because native audio BIDI only accepts audio blobs (no 1008 errors)
+                elif item_type == "activity_end":
+                    print("🛑 [VAD] Client-side Silence Detected! Sending explicit activity_end...", flush=True)
+                    self._q.send_activity_end()
+
+                elif item_type == "frame":
+                    # Camera frame — send as image/jpeg blob alongside audio stream
+                    # Gemini Live accepts image blobs via send_realtime() in addition to audio
+                    jpeg = item.get("data", b"")
+                    if jpeg:
+                        try:
+                            blob = types.Blob(data=jpeg, mime_type="image/jpeg")
+                            self._q.send_realtime(blob)
+                        except Exception as frame_err:
+                            print(f"[upstream_task] frame send error: {frame_err}")
 
         except Exception as e:
             print(f"[upstream_task] Error: {e}")

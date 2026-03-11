@@ -2,7 +2,7 @@
  * GeminiAvatar.jsx
  * ==================
  * A beautiful, Gemini-branded animated avatar that represents
- * the AI interviewer. Built with pure React + CSS + SVG.
+ * the AI agent. Built with pure React + CSS + SVG.
  * No external avatar libraries needed.
  *
  * Visual states:
@@ -22,7 +22,7 @@ import { useEffect, useRef, useState } from 'react'
 const BLINK_INTERVAL_MIN = 2500
 const BLINK_INTERVAL_MAX = 5000
 
-export default function GeminiAvatar({ state = 'idle', audioLevel = 0, name = 'Alex Chen' }) {
+export default function GeminiAvatar({ state = 'idle', audioLevel = 0, name = 'Agent' }) {
   const [blink, setBlink] = useState(false)
   const blinkTimer = useRef(null)
 
