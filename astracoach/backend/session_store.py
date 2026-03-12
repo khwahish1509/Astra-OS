@@ -230,8 +230,8 @@ class FirestoreSessionStore:
 
         # Persist to Firestore (array union — appends without overwriting)
         try:
-            from google.cloud.firestore_v1 import ArrayUnion
-            self._ref(session_id).update({"transcript": ArrayUnion([entry])})
+            from google.cloud import firestore as _fs
+            self._ref(session_id).update({"transcript": _fs.ArrayUnion([entry])})
         except Exception as e:
             print(f"[SessionStore] Firestore transcript error: {e}")
 

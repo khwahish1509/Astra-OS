@@ -1,9 +1,26 @@
 """
-Gemini Live Session Manager
-============================
-Manages the lifecycle of a single Gemini Live API session.
-Handles the bidirectional WebSocket bridge between the browser
-client and the Gemini Live API natively using google-adk.
+Gemini Live Session Manager — Tri-Agent Architecture
+======================================================
+Manages a single Gemini Live session using Google ADK.
+
+Architecture:
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  VoiceAgent  (gemini-2.5-flash-native-audio, bidi streaming)   │
+  │  ├── Tools: web_search, evaluate_response, give_live_coaching,  │
+  │  │          remember_context, get_structured_plan               │
+  │  └── sub_agents: [ReasoningAgent]                               │
+  │                                                                 │
+  │  ReasoningAgent  (gemini-2.5-flash text, code execution)        │
+  │  └── BuiltInCodeExecutor (PIL, numpy, data analysis in Python)  │
+  └─────────────────────────────────────────────────────────────────┘
+
+Routing:
+  VoiceAgent handles all conversational turns natively.
+  When user shows a document/resume or asks for deep analysis,
+  VoiceAgent calls transfer_to_agent("reasoning_agent") automatically.
+  ReasoningAgent uses Python code execution (PIL/Pillow etc.) to
+  extract text, analyse structure, and return detailed results back
+  to VoiceAgent, which summarises verbally for the user.
 
 Audio format contract:
   Browser → Backend:  PCM16, 16 kHz, mono  (binary WS frames)
@@ -23,15 +40,20 @@ from google.adk.agents.run_config import StreamingMode
 from google.adk.sessions import InMemorySessionService
 from agent_tools import ALL_TOOLS
 
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Constants
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
-APP_NAME = "astra_coach"
-USER_ID = "default_user"
+MODEL_VOICE     = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+MODEL_REASONING = "gemini-2.5-flash-preview-04-17"   # text model for code execution
+APP_NAME        = "astra_coach"
+USER_ID         = "default_user"
 
-UNIVERSAL_SUFFIX = """
+# ──────────────────────────────────────────────────────────────────────────────
+# System prompts
+# ──────────────────────────────────────────────────────────────────────────────
+
+UNIVERSAL_VOICE_SUFFIX = """
 
 ─── Live Session Rules (always follow, regardless of persona) ───
 Conversation style:
@@ -42,27 +64,111 @@ Conversation style:
 
 Tools available: web_search, evaluate_response, give_live_coaching,
 remember_context, get_structured_plan. Use them when genuinely helpful.
+
+─── ReasoningAgent delegation (IMPORTANT) ───────────────────────
+You have a sub-agent called "reasoning_agent" that can:
+- Execute Python code with PIL/Pillow to analyse document/resume images
+- Extract fine text, detect layout, count sections, score formatting
+- Run any data analysis that requires code execution
+
+WHEN TO DELEGATE:
+- User shows a document, resume, CV, or certificate via camera
+- User asks to "read", "analyse", or "review" something they're holding up
+- Any task that needs precise text extraction or image analysis
+- User explicitly asks you to "look at this" or "what does this say"
+
+HOW TO DELEGATE:
+Say briefly: "Let me take a closer look at that for you."
+Then use transfer_to_agent with agent_name="reasoning_agent".
+After reasoning_agent returns, summarise its findings conversationally.
 """
+
+REASONING_AGENT_PROMPT = """
+You are ReasoningAgent — a document and image analysis specialist.
+You are called by the VoiceAgent when fine image/document analysis is needed.
+
+Your capabilities:
+- Python code execution with PIL/Pillow, numpy, io
+- Image analysis: text detection, layout analysis, OCR-like extraction
+- Document scoring: content quality, formatting, completeness
+
+When given an image or document to analyse:
+1. Write Python code using PIL to open and inspect the image
+2. Analyse dimensions, colour distribution, text regions
+3. Extract any readable text content using available libraries
+4. Provide a structured analysis: sections found, key content, quality score
+5. Return a concise summary the VoiceAgent can relay conversationally
+
+Always return results as a clear text summary (not code blocks) since
+VoiceAgent will read it aloud. Be thorough but keep the final summary
+under 200 words.
+"""
+
 
 def build_system_prompt(session) -> str:
     """Combine the user-defined persona prompt with universal live-session rules."""
     base = session.system_prompt.strip()
     if session.user_name:
         base = f"The user's name is {session.user_name}. Address them by name naturally.\n\n" + base
-    return base + UNIVERSAL_SUFFIX
 
-# ──────────────────────────────────────────────────────────────
+    # Inject persisted memories so the agent remembers across Cloud Run restarts
+    if session.memories:
+        memory_lines = "\n".join(f"  {k}: {v}" for k, v in session.memories.items())
+        base = base + f"\n\n─── User memories from previous turns ───\n{memory_lines}\n"
+
+    return base + UNIVERSAL_VOICE_SUFFIX
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Build the Reasoning Sub-Agent
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _build_reasoning_agent() -> LlmAgent:
+    """
+    Creates the ReasoningAgent with BuiltInCodeExecutor.
+
+    NOTE: BuiltInCodeExecutor cannot be mixed with custom FunctionTools
+    in the same agent (ADK constraint). ReasoningAgent gets code execution;
+    VoiceAgent gets all custom FunctionTools. They complement each other.
+    """
+    try:
+        from google.adk.code_executors import BuiltInCodeExecutor
+        reasoning_agent = LlmAgent(
+            name="reasoning_agent",
+            model=MODEL_REASONING,
+            instruction=REASONING_AGENT_PROMPT,
+            code_executor=BuiltInCodeExecutor(),
+        )
+        print("[GeminiLive] ✅ ReasoningAgent created with BuiltInCodeExecutor")
+        return reasoning_agent
+    except ImportError:
+        # ADK version doesn't have BuiltInCodeExecutor — create without it
+        print("[GeminiLive] ⚠  BuiltInCodeExecutor not available — reasoning agent runs without code execution")
+        return LlmAgent(
+            name="reasoning_agent",
+            model=MODEL_REASONING,
+            instruction=REASONING_AGENT_PROMPT,
+        )
+    except Exception as e:
+        print(f"[GeminiLive] ⚠  Could not create ReasoningAgent: {e} — disabling sub-agent")
+        return None
+
+
+# Build once at module load (shared across all sessions)
+_reasoning_agent = _build_reasoning_agent()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # GeminiLiveBridge
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 class GeminiLiveBridge:
     """
-    Bridges a browser WebSocket ↔ Gemini Live API session natively using
-    the Google ADK (Agent Development Kit).
+    Bridges a browser WebSocket ↔ Gemini Live API session via Google ADK.
 
-    Architecture exactly mirrors the ADK bidi-demo sample:
-      - upstream_task:   reads audio blobs from a Queue and sends to LiveRequestQueue
-      - downstream_task: iterates run_live() events and forwards audio/control to browser
+    Architecture mirrors the ADK bidi-demo sample:
+      - upstream_task:   reads audio blobs from a Queue → LiveRequestQueue
+      - downstream_task: iterates run_live() events → forwards audio/control to browser
     """
 
     def __init__(self, api_key: str, session, ws_send_bytes, ws_send_text):
@@ -70,13 +176,13 @@ class GeminiLiveBridge:
         self.session = session
         self._send_bytes = ws_send_bytes   # coroutine: send binary to browser
         self._send_text  = ws_send_text    # coroutine: send JSON text to browser
-        self._closed = False
-        self._interrupted = False  # Gate: when True, block audio forwarding to browser
+        self._closed     = False
+        self._interrupted = False          # gate: when True, block audio forwarding
 
         # Shared queue: main.py pushes items here, upstream_task reads them
         self._ws_incoming_queue: asyncio.Queue = asyncio.Queue()
 
-        # Live request queue for ADK bidirectional streaming
+        # ADK live request queue for bidirectional streaming
         self._q = LiveRequestQueue()
 
     async def run(self):
@@ -87,31 +193,36 @@ class GeminiLiveBridge:
         os.environ["GOOGLE_API_KEY"] = self.api_key
         system_prompt = build_system_prompt(self.session)
 
-        print(f"[GeminiLive] Starting session with model={MODEL}")
+        print(f"[GeminiLive] Starting session: model={MODEL_VOICE}")
 
-        # 1. Initialize ADK Agent
-        agent = LlmAgent(
+        # 1. Build VoiceAgent with all custom tools + ReasoningAgent as sub_agent
+        agent_kwargs = dict(
             name=APP_NAME,
-            model=MODEL,
+            model=MODEL_VOICE,
             instruction=system_prompt,
             tools=ALL_TOOLS,
         )
+        if _reasoning_agent is not None:
+            agent_kwargs["sub_agents"] = [_reasoning_agent]
+            print("[GeminiLive] Tri-agent routing enabled: VoiceAgent → ReasoningAgent")
 
-        # 2. Initialize session service (in-memory for now)
+        voice_agent = LlmAgent(**agent_kwargs)
+
+        # 2. ADK session service
         session_service = InMemorySessionService()
         session_id = str(uuid.uuid4())
         await session_service.create_session(
             app_name=APP_NAME, user_id=USER_ID, session_id=session_id
         )
 
-        # 3. Build Runner
+        # 3. Runner
         runner = Runner(
             app_name=APP_NAME,
-            agent=agent,
+            agent=voice_agent,
             session_service=session_service,
         )
 
-        # 4. Build RunConfig — Native Audio BIDI
+        # 4. RunConfig — Native Audio BIDI
         run_config = RunConfig(
             streaming_mode=StreamingMode.BIDI,
             response_modalities=["AUDIO"],
@@ -121,7 +232,7 @@ class GeminiLiveBridge:
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
             ),
-            save_live_blob=True, # Critical: Required for ADK to flush and yield interruption events
+            save_live_blob=True,  # Required for ADK to flush and yield interruption events
         )
 
         # 5. Notify frontend that session is live
@@ -141,7 +252,7 @@ class GeminiLiveBridge:
         except Exception as e:
             print(f"[GeminiLive] Warning: could not send greeting: {e}")
 
-        # 7. Run upstream and downstream concurrently (exact bidi-demo pattern)
+        # 7. Run upstream and downstream concurrently
         try:
             await asyncio.gather(
                 self._upstream_task(),
@@ -156,16 +267,15 @@ class GeminiLiveBridge:
 
     async def _upstream_task(self):
         """
-        Reads audio/control items from the shared queue and
-        forwards them to the ADK LiveRequestQueue.
-        Mirrors bidi-demo's upstream_task exactly.
+        Reads audio/control items from the shared queue and forwards
+        them to the ADK LiveRequestQueue.
         """
         print("[upstream_task] started")
         try:
             while True:
                 item = await self._ws_incoming_queue.get()
 
-                if item is None:  # Shutdown sentinel
+                if item is None:   # Shutdown sentinel
                     print("[upstream_task] received shutdown sentinel")
                     break
 
@@ -178,16 +288,14 @@ class GeminiLiveBridge:
                         self._q.send_realtime(blob)
 
                 elif item_type == "activity_start":
-                    print("🎤 [VAD] Client-side Voice Activity Detected! Sending explicit activity_start...", flush=True)
+                    print("🎤 [VAD] activity_start", flush=True)
                     self._q.send_activity_start()
 
                 elif item_type == "activity_end":
-                    print("🛑 [VAD] Client-side Silence Detected! Sending explicit activity_end...", flush=True)
+                    print("🛑 [VAD] activity_end", flush=True)
                     self._q.send_activity_end()
 
                 elif item_type == "frame":
-                    # Camera frame — send as image/jpeg blob alongside audio stream
-                    # Gemini Live accepts image blobs via send_realtime() in addition to audio
                     jpeg = item.get("data", b"")
                     if jpeg:
                         try:
@@ -202,7 +310,6 @@ class GeminiLiveBridge:
     async def _downstream_task(self, runner: Runner, session_id: str, run_config: RunConfig):
         """
         Iterates run_live() events and routes audio/control to the browser.
-        Mirrors bidi-demo's downstream_task exactly.
         """
         print("[downstream_task] started, calling runner.run_live()")
         try:
@@ -273,17 +380,27 @@ class GeminiLiveBridge:
                             "text": text,
                         })
 
-                # ── 6. Handle tool calls (ADK executes natively) ──────────
+                # ── 6. Handle tool calls + agent transfers ────────────────
                 if hasattr(event, "get_function_calls"):
                     calls = event.get_function_calls()
                     if calls:
                         await self._notify({"type": "status", "state": "thinking"})
                         for fc in calls:
-                            await self._notify({
-                                "type": "tool_call",
-                                "name": fc.name,
-                                "status": "running",
-                            })
+                            # Detect ReasoningAgent delegation
+                            tool_name = fc.name
+                            if tool_name == "transfer_to_agent":
+                                target = (fc.args or {}).get("agent_name", "reasoning_agent")
+                                await self._notify({
+                                    "type": "tool_call",
+                                    "name": f"→ {target}",
+                                    "status": "running",
+                                })
+                            else:
+                                await self._notify({
+                                    "type": "tool_call",
+                                    "name": tool_name,
+                                    "status": "running",
+                                })
 
         except Exception as e:
             print(f"[downstream_task] Error: {e}")
@@ -293,9 +410,7 @@ class GeminiLiveBridge:
 
         print("[downstream_task] run_live() generator completed")
 
-    # ──────────────────────────────────────────────────────────────
-    # External interface (called by main.py WebSocket handler)
-    # ──────────────────────────────────────────────────────────────
+    # ── External interface (called by main.py WebSocket handler) ─────────────
 
     async def push(self, item: dict):
         """Push a browser WebSocket message into the upstream queue."""
@@ -305,7 +420,7 @@ class GeminiLiveBridge:
     async def close(self):
         """Gracefully shutdown the bridge."""
         self._closed = True
-        await self._ws_incoming_queue.put(None)  # Sentinel to unblock upstream_task
+        await self._ws_incoming_queue.put(None)   # Sentinel to unblock upstream_task
         try:
             self._q.close()
         except Exception:

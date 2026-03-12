@@ -15,33 +15,8 @@ import { useState, useEffect } from 'react'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
-// ── Simli Face IDs ────────────────────────────────────────────────────────
-// Map each persona template to a distinct Simli photorealistic face.
-//
-// HOW TO GET FACE IDs:
-//   1. Sign up at https://app.simli.com
-//   2. Dashboard → "Faces" → copy the Face ID next to each avatar
-//   OR call:  GET https://api.simli.ai/getFaces  (Bearer: your API key)
-//
-// You can also override all of these with a single VITE_SIMLI_FACE_ID
-// env var if you want every persona to use the same face.
-//
-// The IDs below are PLACEHOLDERS. Replace with your real IDs.
-const DEFAULT_FACE_ID = import.meta.env.VITE_SIMLI_FACE_ID || 'tmp9i8bbq7'
-
-const SIMLI_FACES = {
-  interview:  import.meta.env.VITE_SIMLI_FACE_INTERVIEW  || DEFAULT_FACE_ID, // e.g. "Alex"
-  language:   import.meta.env.VITE_SIMLI_FACE_LANGUAGE   || DEFAULT_FACE_ID, // e.g. "Sam"
-  socrates:   import.meta.env.VITE_SIMLI_FACE_SOCRATES   || DEFAULT_FACE_ID, // e.g. "Napoleon"
-  sales:      import.meta.env.VITE_SIMLI_FACE_SALES      || DEFAULT_FACE_ID, // e.g. "Karen"
-  doctor:     import.meta.env.VITE_SIMLI_FACE_DOCTOR     || DEFAULT_FACE_ID, // e.g. "Doctor"
-  therapist:  import.meta.env.VITE_SIMLI_FACE_THERAPIST  || DEFAULT_FACE_ID, // e.g. "Lincoln"
-  custom:     import.meta.env.VITE_SIMLI_FACE_CUSTOM     || DEFAULT_FACE_ID, // user's choice
-}
-
 // ── Persona Templates ─────────────────────────────────────────────
 // These are just starting-point prompts. The user can edit freely.
-// simli_face_id — the Simli avatar shown for this persona.
 const TEMPLATES = [
   {
     id: 'interview',
@@ -49,7 +24,6 @@ const TEMPLATES = [
     name: 'Interview Coach',
     tagline: 'Tough but fair. Preps you for FAANG.',
     color: '#4f7dff',
-    simli_face_id: SIMLI_FACES.interview,
     prompt: `You are Alex Chen, a senior technical recruiter at a top tech company conducting a mock interview. You are warm but direct, and give specific, actionable feedback.
 
 Interview structure:
@@ -66,7 +40,6 @@ Always probe deeper: if an answer is shallow, ask "Can you walk me through a spe
     name: 'Language Tutor',
     tagline: 'Immersive conversation practice.',
     color: '#10b981',
-    simli_face_id: SIMLI_FACES.language,
     prompt: `You are Sofia, a native Spanish speaker and patient language tutor. Your goal is to help the user practice conversational Spanish through natural dialogue.
 
 How you teach:
@@ -84,7 +57,6 @@ Start by asking the user's name and what they want to talk about today.`,
     name: 'Socratic Tutor',
     tagline: 'Learn anything through questions.',
     color: '#f59e0b',
-    simli_face_id: SIMLI_FACES.socrates,
     prompt: `You are a brilliant Socratic tutor. You never give direct answers — instead, you guide the student to discover the answer themselves through questions.
 
 Your method:
@@ -102,7 +74,6 @@ You can tutor any subject: math, science, history, philosophy, coding, literatur
     name: 'Sales Coach',
     tagline: 'Roleplay cold calls and objection handling.',
     color: '#8b5cf6',
-    simli_face_id: SIMLI_FACES.sales,
     prompt: `You are Marcus, a veteran sales coach with 20 years of experience. You run live sales roleplay scenarios to help salespeople improve.
 
 Session flow:
@@ -120,7 +91,6 @@ Push back realistically. Don't make it too easy. A good sales rep should earn th
     name: 'Medical Tutor',
     tagline: 'Clinical case walkthroughs for students.',
     color: '#ef4444',
-    simli_face_id: SIMLI_FACES.doctor,
     prompt: `You are Dr. Patel, an experienced attending physician who teaches medical students through clinical case discussions. You are thorough, patient, and passionate about evidence-based medicine.
 
 How you teach:
@@ -140,7 +110,6 @@ Emphasise: systematic thinking, patient safety, and "why" over memorisation. Sta
     name: 'Reflective Listener',
     tagline: 'A supportive space to think out loud.',
     color: '#06b6d4',
-    simli_face_id: SIMLI_FACES.therapist,
     prompt: `You are a warm, non-judgmental reflective listener. Your role is to help the user process their thoughts and feelings through active listening and gentle questions. You do NOT give advice unless explicitly asked.
 
 Your approach:
@@ -158,7 +127,6 @@ Keep responses short (2-3 sentences). You are a thinking partner, not a therapis
     name: 'Custom Persona',
     tagline: 'Write your own from scratch.',
     color: '#94a3b8',
-    simli_face_id: SIMLI_FACES.custom,
     prompt: `You are [NAME], a [DESCRIPTION].
 
 Your goal: [WHAT THE AGENT DOES]
@@ -178,16 +146,15 @@ Replace everything in [brackets] with your own content.`,
 ]
 
 export default function SetupScreen({ onStart }) {
-  const [selectedId,   setSelectedId]   = useState('interview')
-  const [prompt,       setPrompt]       = useState(TEMPLATES[0].prompt)
-  const [personaName,  setPersonaName]  = useState(TEMPLATES[0].name)
-  const [simliFaceId,  setSimliFaceId]  = useState(TEMPLATES[0].simli_face_id)
-  const [userName,     setUserName]     = useState('')
-  const [voice,        setVoice]        = useState('Aoede')
-  const [voices,       setVoices]       = useState([])
-  const [tab,          setTab]          = useState('templates')  // 'templates' | 'editor'
-  const [loading,      setLoading]      = useState(false)
-  const [error,        setError]        = useState('')
+  const [selectedId,  setSelectedId]  = useState('interview')
+  const [prompt,      setPrompt]      = useState(TEMPLATES[0].prompt)
+  const [personaName, setPersonaName] = useState(TEMPLATES[0].name)
+  const [userName,    setUserName]    = useState('')
+  const [voice,       setVoice]       = useState('Aoede')
+  const [voices,      setVoices]      = useState([])
+  const [tab,         setTab]         = useState('templates')  // 'templates' | 'editor'
+  const [loading,     setLoading]     = useState(false)
+  const [error,       setError]       = useState('')
 
   useEffect(() => {
     fetch(`${BACKEND}/api/voices`)
@@ -200,7 +167,6 @@ export default function SetupScreen({ onStart }) {
     setSelectedId(tpl.id)
     setPrompt(tpl.prompt)
     setPersonaName(tpl.name)
-    setSimliFaceId(tpl.simli_face_id)
     setTab('editor')
   }
 
@@ -223,16 +189,7 @@ export default function SetupScreen({ onStart }) {
         throw new Error(e.detail || 'Server error')
       }
       const data = await res.json()
-      // Merge simli_face_id into config — backend doesn't need to know about it,
-      // it's a purely frontend UI concern for the avatar renderer.
-      onStart({
-        ...data,
-        backendUrl: BACKEND,
-        config: {
-          ...(data.config || {}),
-          simli_face_id: simliFaceId || DEFAULT_FACE_ID,
-        },
-      })
+      onStart({ ...data, backendUrl: BACKEND })
     } catch (e) {
       setError(e.message || 'Failed — is the backend running?')
     } finally {
@@ -351,26 +308,21 @@ export default function SetupScreen({ onStart }) {
               </div>
 
               <div style={S.settingGroup}>
-                <label style={S.settingLabel}>Simli Avatar Face ID</label>
-                <input style={S.settingInput}
-                  placeholder="e.g. tmp9i8bbq7  (leave blank for default)"
-                  value={simliFaceId === DEFAULT_FACE_ID ? '' : simliFaceId}
-                  onChange={e => setSimliFaceId(e.target.value.trim() || DEFAULT_FACE_ID)} />
-                <div style={S.settingHint}>
-                  Get your face IDs at{' '}
-                  <a href="https://app.simli.com" target="_blank" rel="noreferrer"
-                    style={{ color:'rgba(79,125,255,0.8)' }}>app.simli.com</a>
-                  {' '}→ Faces. Or call: GET https://api.simli.ai/getFaces
-                </div>
-              </div>
-
-              <div style={S.settingGroup}>
                 <label style={S.settingLabel}>Available tools (always on)</label>
-                {['🔍 Web Search (Google)','📊 Evaluate Response','🎯 Live Coaching',
-                  '🧠 Remember Context','📋 Structured Plan'].map(t => (
+                {[
+                  '🔍 Web Search (Google)',
+                  '📊 Evaluate Response',
+                  '🎯 Live Coaching',
+                  '🧠 Remember Context',
+                  '📋 Structured Plan',
+                  '🔬 Document Analysis (ReasoningAgent)',
+                ].map(t => (
                   <div key={t} style={S.toolItem}><span style={S.toolCheck}>✓</span>{t}</div>
                 ))}
-                <div style={S.settingHint}>ADK tools Gemini can call during the session</div>
+                <div style={S.settingHint}>
+                  Hold up a document or resume to the camera — the agent will
+                  automatically delegate to ReasoningAgent for deep analysis
+                </div>
               </div>
             </div>
           )}
@@ -386,7 +338,7 @@ export default function SetupScreen({ onStart }) {
           </button>
 
           <div style={S.footer}>
-            Gemini 2.5 Flash Native Audio · Google ADK · Cloud Run · Zero third-party AI
+            Gemini 2.5 Flash Native Audio · Google ADK · Tri-Agent Routing · Cloud Run
           </div>
         </div>
       </div>
