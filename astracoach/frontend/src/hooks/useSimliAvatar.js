@@ -1,255 +1,353 @@
 /**
  * useSimliAvatar.js
  * ==================
- * Manages the Simli real-time photorealistic avatar.
+ * Direct WebRTC implementation for the Simli avatar.
  *
- * What Simli does:
- *   - Accepts PCM16 audio @ 16 kHz via sendAudioData(Uint8Array)
- *   - Returns a lip-synced WebRTC video + audio stream in real time
- *   - Sub-300ms latency from audio in → visible mouth movement
+ * ── KEY FINDING (from official simli-client source) ──────────────────────────
+ *   Audio PCM is sent via the SAME WebSocket used for SDP/ICE signalling,
+ *   NOT via the RTCDataChannel.  The data channel is created only to satisfy
+ *   the WebRTC handshake — Simli ignores audio bytes sent on it.
  *
- * Audio handoff strategy:
- *   When Simli connects, InterviewRoom mutes the AudioWorklet playback
- *   (setPlaybackVolume(0)) so audio comes exclusively from Simli's WebRTC
- *   <audio> element — perfectly synced with the avatar's lip movements.
- *   If Simli disconnects, volume is restored to 1 and the GeminiAvatar
- *   SVG fallback takes over automatically.
+ *   Official simli-client sendAudioData():
+ *     this.webSocket.send(audioData)   ← WebSocket binary frame
  *
- * Gemini outputs PCM16 @ 24 kHz. Simli expects PCM16 @ 16 kHz.
- * We downsample 24 → 16 kHz here using simple decimation (good enough
- * for speech; keeps latency near zero compared to a resampler).
+ *   We replicate this exactly.  After "START" is received the WebSocket
+ *   accepts raw Uint8Array binary frames as PCM16 @ 16 kHz.
  *
- * Usage:
- *   const simli = useSimliAvatar({ apiKey, faceId, onConnected, onDisconnected })
- *   simli.initialize()           — start WebRTC session (call after user gesture)
- *   simli.sendPcm24kHz(buf)      — forward PCM from Gemini to avatar
- *   simli.close()                — cleanly end the session
+ * ── Simli compose API (v2) ────────────────────────────────────────────────────
+ *   Token:     POST https://api.simli.ai/compose/token
+ *              Header: x-simli-api-key: <apiKey>
+ *              Body:   { faceId, maxSessionLength, maxIdleTime }
  *
- *   // Mount these in JSX — always rendered, display toggled by CSS:
- *   <video ref={simli.videoRef} autoPlay playsInline />
- *   <audio ref={simli.audioRef} autoPlay />
+ *   WebSocket: wss://api.simli.ai/compose/webrtc/p2p?session_token=<token>
+ *
+ *   Signalling messages (text frames, JSON):
+ *     → { type:"offer", sdp:"..." }      (SDP offer)
+ *     ← { type:"answer", sdp:"..." }     (SDP answer)
+ *     → / ← { type:"candidate", ... }   (trickle ICE)
+ *
+ *   Control messages (text frames, plain strings):
+ *     ← "START"                 avatar is live — begin sending audio
+ *     ← "STOP"                  session ended
+ *     ← "SPEAK" / "SILENT"      avatar speaking state
+ *     ← "ACK"                   heartbeat ack
+ *     ← "MISSING_SESSION_TOKEN" re-send token
+ *
+ *   Audio input (binary frames):
+ *     → Uint8Array   PCM16 @ 16 kHz   sent AFTER "START" via ws.send()
+ *
+ *   Audio/video output:
+ *     ← WebRTC audio track  (received on <audio> element via srcObject)
+ *     ← WebRTC video track  (received on <video> element via srcObject)
  */
 
 import { useRef, useState, useCallback, useEffect } from 'react'
-import { SimliClient } from 'simli-client'
 
 // ── Constants ────────────────────────────────────────────────────────────────
+const SIMLI_API   = 'https://api.simli.ai'
+const SIMLI_WS    = 'wss://api.simli.ai'
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+]
+const WS_TIMEOUT  = 15000   // ms to wait for WebSocket to open + START
+const ICE_TIMEOUT = 4000    // ms for ICE gathering
 
-const GEMINI_RATE = 24000    // Gemini Live output sample rate
-const SIMLI_RATE  = 16000    // Simli required input sample rate
-const RATIO       = GEMINI_RATE / SIMLI_RATE   // = 1.5
+const GEMINI_RATE = 24000
+const SIMLI_RATE  = 16000
+const RATIO       = GEMINI_RATE / SIMLI_RATE   // 1.5
 
-// ── Downsampler ──────────────────────────────────────────────────────────────
-/**
- * Downsample PCM16 from 24 kHz → 16 kHz.
- *
- * Uses simple decimation: pick every N-th sample (ratio = 1.5).
- * For speech this is transparent — no audible aliasing in the 0-8 kHz
- * range that Simli's neural renderer uses for lip sync.
- *
- * @param  {ArrayBuffer} buf  — raw PCM16 @ 24 kHz from Gemini
- * @returns {Uint8Array}       — raw PCM16 bytes @ 16 kHz for Simli
- */
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
 function downsample24to16(buf) {
   const src = new Int16Array(buf)
   const len = Math.floor(src.length / RATIO)
   const dst = new Int16Array(len)
-  for (let i = 0; i < len; i++) {
-    dst[i] = src[Math.floor(i * RATIO)]
-  }
+  for (let i = 0; i < len; i++) dst[i] = src[Math.floor(i * RATIO)]
   return new Uint8Array(dst.buffer)
 }
 
+function waitForIce(pc) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') { resolve(); return }
+    const check = () => { if (pc.iceGatheringState === 'complete') resolve() }
+    pc.addEventListener('icegatheringstatechange', check)
+    setTimeout(resolve, ICE_TIMEOUT)
+  })
+}
+
+// ── Token fetching (tries v2 compose API first, falls back to legacy) ────────
+async function fetchSessionToken(apiKey, faceId) {
+  // ── Try v2 compose API ────────────────────────────────────────────────────
+  try {
+    const r = await fetch(`${SIMLI_API}/compose/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-simli-api-key': apiKey,
+      },
+      body: JSON.stringify({ faceId, maxSessionLength: 3600, maxIdleTime: 120 }),
+    })
+    const body = await r.json().catch(() => null)
+    if (body?.session_token) {
+      console.log('[Simli] Token via /compose/token ✓')
+      return body.session_token
+    }
+    console.warn('[Simli] /compose/token response:', r.status, body)
+  } catch (e) {
+    console.warn('[Simli] /compose/token failed:', e.message)
+  }
+
+  // ── Fall back to legacy /startAudioToVideoSession ─────────────────────────
+  console.log('[Simli] Falling back to /startAudioToVideoSession...')
+  const r = await fetch(`${SIMLI_API}/startAudioToVideoSession`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      faceId, isJPG: false, apiKey,
+      syncAudio: true, handleSilence: true,
+      maxSessionLength: 3600, maxIdleTime: 120,
+    }),
+  })
+  const body = await r.json().catch(() => null)
+  if (!body?.session_token) {
+    throw new Error(
+      `Token fetch failed (${r.status}): ` +
+      (body ? JSON.stringify(body) : 'empty response')
+    )
+  }
+  if (!r.ok) console.warn('[Simli] Legacy token warning:', body.detail)
+  console.log('[Simli] Token via /startAudioToVideoSession ✓')
+  return body.session_token
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
-
-/**
- * @param {object} opts
- * @param {string}    opts.apiKey        — Simli API key (VITE_SIMLI_API_KEY)
- * @param {string}    opts.faceId        — Simli face ID for this persona
- * @param {Function?} opts.onConnected   — called when WebRTC stream is live
- * @param {Function?} opts.onDisconnected— called when stream ends/fails
- */
 export function useSimliAvatar({ apiKey, faceId, onConnected, onDisconnected }) {
-  // Refs
-  const clientRef = useRef(null)
-  const videoRef  = useRef(null)   // <video> DOM element — attach to JSX
-  const audioRef  = useRef(null)   // <audio> DOM element — attach to JSX
+  const videoRef        = useRef(null)
+  const audioRef        = useRef(null)
+  const pcRef           = useRef(null)
+  const dcRef           = useRef(null)   // data channel — for WebRTC handshake only
+  const wsRef           = useRef(null)   // WebSocket — used for signalling AND audio
+  const sessionReadyRef = useRef(false)  // true after "START" received; gates audio sending
 
-  // State — drives what InterviewRoom renders
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading,   setIsLoading]   = useState(false)
   const [error,       setError]       = useState('')
 
-  // ── initialize ─────────────────────────────────────────────────────────────
-  /**
-   * Starts the Simli WebRTC session. Call this once after the user gesture
-   * (i.e., after they click "Allow Mic & Begin") because WebRTC requires
-   * the page to be active and audio context to be running.
-   */
-  const initialize = useCallback(async () => {
-    if (!apiKey) {
-      console.warn('[Simli] No API key — avatar disabled. Set VITE_SIMLI_API_KEY.')
-      return
-    }
-    if (!faceId) {
-      console.warn('[Simli] No face ID — avatar disabled. Set simli_face_id on your persona.')
-      return
-    }
-    if (!videoRef.current || !audioRef.current) {
-      console.warn('[Simli] video/audio elements not yet mounted.')
-      return
-    }
+  // ── cleanup ───────────────────────────────────────────────────────────────
+  const cleanup = useCallback(() => {
+    sessionReadyRef.current = false
+    try { wsRef.current?.close() } catch { /* ignore */ }
+    try { dcRef.current?.close() } catch { /* ignore */ }
+    try { pcRef.current?.close() } catch { /* ignore */ }
+    wsRef.current = null
+    dcRef.current = null
+    pcRef.current = null
+    if (videoRef.current) videoRef.current.srcObject = null
+    if (audioRef.current) audioRef.current.srcObject = null
+  }, [])
 
-    if (isLoading || isConnected) return  // prevent double-init from React StrictMode
+  // ── initialize ────────────────────────────────────────────────────────────
+  const initialize = useCallback(async () => {
+    if (!apiKey)  { console.warn('[Simli] No API key.');  return }
+    if (!faceId)  { console.warn('[Simli] No face ID.'); return }
+    if (!videoRef.current || !audioRef.current) {
+      console.warn('[Simli] video/audio elements not mounted.'); return
+    }
+    if (isLoading || isConnected) return
 
     setIsLoading(true)
     setError('')
 
     try {
-      // ── Step 1: Pre-fetch the Simli session token ourselves ─────────────────
-      // SimliClient.start() runs getIceServers() + createSessionToken() in
-      // parallel. getIceServers() returns 404 (endpoint doesn't exist) and
-      // retries 100× with 2s delay = 200 seconds before falling back to Google
-      // STUN. We bypass this entirely by:
-      //   a) fetching the session token here (fast, ~200ms)
-      //   b) pre-setting it on the client via Initialize()
-      //   c) calling start(googleStunServers) — skips getIceServers() entirely
-      console.log('[Simli] Fetching session token...')
-      const tokenResp = await fetch('https://api.simli.ai/startAudioToVideoSession', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          faceId:           faceId,
-          isJPG:            false,
-          apiKey:           apiKey,
-          syncAudio:        true,
-          handleSilence:    true,
-          maxSessionLength: 3600,
-          maxIdleTime:      120,
-        }),
+      // ── 1. Session token ────────────────────────────────────────────────
+      const session_token = await fetchSessionToken(apiKey, faceId)
+
+      // ── 2. RTCPeerConnection ─────────────────────────────────────────────
+      cleanup()
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS })
+      pcRef.current = pc
+
+      // Data channel — required by Simli for WebRTC connection establishment.
+      // Audio is NOT sent here; it goes via the WebSocket (see sendPcm24kHz).
+      const dc = pc.createDataChannel('chat', { ordered: true })
+      dcRef.current = dc
+
+      // Receive avatar video + audio tracks from Simli
+      pc.addEventListener('track', (evt) => {
+        console.log('[Simli] Track received:', evt.track.kind)
+        const stream = evt.streams?.[0] ?? new MediaStream([evt.track])
+
+        if (evt.track.kind === 'video' && videoRef.current) {
+          videoRef.current.srcObject = stream
+          videoRef.current.play().catch(e => console.warn('[Simli] video play() failed:', e))
+        } else if (evt.track.kind === 'audio' && audioRef.current) {
+          audioRef.current.srcObject = stream
+          // Explicit .play() required — browsers block autoPlay on WebRTC srcObject
+          audioRef.current.play().catch(e => console.warn('[Simli] audio play() failed:', e))
+          console.log('[Simli] Audio srcObject set ✓, play() called')
+        }
       })
 
-      // Always parse the JSON body — Simli returns a session_token even on 400
-      // when the face ID is invalid (INVALID_FACE_ID), using their default face.
-      // Only hard-fail if there is no session_token at all.
-      let tokenBody = null
-      try { tokenBody = await tokenResp.json() } catch { /* non-JSON error body */ }
-
-      if (!tokenBody?.session_token) {
-        // No token at all — hard fail (e.g. invalid API key, malformed request)
-        throw new Error(
-          `Simli session init failed (${tokenResp.status}): ` +
-          (tokenBody ? JSON.stringify(tokenBody) : 'empty response')
-        )
-      }
-
-      if (!tokenResp.ok) {
-        // Soft error — face ID not found, Simli falls back to a default face
-        console.warn(
-          `[Simli] ⚠ Face ID "${faceId}" not found in your account ` +
-          `(${tokenBody.detail}). Using Simli default face. ` +
-          `Go to https://app.simli.com → Faces to get a valid ID, ` +
-          `then set VITE_SIMLI_FACE_ID in your .env`
-        )
-      }
-
-      const { session_token } = tokenBody
-      console.log('[Simli] Session token received ✓', tokenResp.ok ? '' : '(default face)')
-
-      // ── Step 2: Initialize client with token pre-loaded ─────────────────────
-      const client = new SimliClient()
-      clientRef.current = client
-
-      client.Initialize({
-        apiKey,
-        faceID:            faceId,
-        session_token,               // pre-set → WS handler sends it directly, no extra fetch
-        handleSilence:     true,
-        maxSessionLength:  3600,
-        maxIdleTime:       120,
-        videoRef:          videoRef.current,   // must be actual DOM element, not React ref
-        audioRef:          audioRef.current,
-        maxRetryAttempts:  3,        // cap retries — default 100 is way too aggressive
-        retryDelay_ms:     1000,
-        enableConsoleLogs: false,
+      // ICE candidates: forward to Simli via WebSocket (trickle ICE)
+      const pendingCandidates = []
+      let wsReady = false
+      pc.addEventListener('icecandidate', (evt) => {
+        if (!evt.candidate) return
+        const msg = JSON.stringify({
+          type: 'candidate',
+          candidate: evt.candidate.candidate,
+          sdpMLineIndex: evt.candidate.sdpMLineIndex,
+          sdpMid: evt.candidate.sdpMid,
+        })
+        if (wsReady && wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(msg)
+        } else {
+          pendingCandidates.push(msg)
+        }
       })
 
-      // ── Step 3: start() with ICE servers provided → skips getIceServers() ───
-      // Passing a non-empty iceServers array causes SimliClient to skip its
-      // getIceServers() call entirely and go straight to WebSocket + WebRTC.
-      await client.start([{ urls: ['stun:stun.l.google.com:19302'] }])
+      // Simli sends A/V to us; we only receive
+      pc.addTransceiver('audio', { direction: 'recvonly' })
+      pc.addTransceiver('video', { direction: 'recvonly' })
 
-      setIsLoading(false)
-      setIsConnected(true)
-      onConnected?.()
+      // Build SDP offer
+      await pc.setLocalDescription(await pc.createOffer())
+      await waitForIce(pc)
 
-      console.log('[Simli] ✅ Connected — avatar is live')
+      // ── 3. WebSocket — compose/webrtc/p2p endpoint ───────────────────────
+      const wsUrl = `${SIMLI_WS}/compose/webrtc/p2p?session_token=${encodeURIComponent(session_token)}`
+      console.log('[Simli] Connecting WebSocket (compose API)...')
+      const ws = new WebSocket(wsUrl)
+      ws.binaryType = 'arraybuffer'   // receive binary as ArrayBuffer
+      wsRef.current = ws
+
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('Simli WebSocket timeout')),
+          WS_TIMEOUT
+        )
+
+        ws.addEventListener('open', () => {
+          console.log('[Simli] WebSocket open ✓')
+          wsReady = true
+          // Send SDP offer as JSON text frame
+          ws.send(JSON.stringify(pc.localDescription))
+          // Flush ICE candidates that arrived before WS opened
+          pendingCandidates.forEach(c => ws.send(c))
+          pendingCandidates.length = 0
+        })
+
+        ws.addEventListener('message', async (evt) => {
+          // Audio frames from Simli come as binary — ignore them here
+          if (evt.data instanceof ArrayBuffer) return
+
+          const raw = typeof evt.data === 'string' ? evt.data : null
+          if (!raw) return
+
+          // ── Control messages (plain strings) ──────────────────────────
+          if (raw === 'START') {
+            clearTimeout(timer)
+            // Flag: WebSocket now accepts binary audio frames
+            sessionReadyRef.current = true
+            // Warm-up: send 6000 bytes of silence (= 187.5ms @ 16kHz mono PCM16)
+            // This matches the official simli-client START handler exactly.
+            ws.send(new Uint8Array(6000))
+            console.log('[Simli] ✅ Avatar live — audio path: WebSocket binary')
+            setIsLoading(false)
+            setIsConnected(true)
+            onConnected?.()
+            resolve()
+            return
+          }
+          if (raw === 'STOP') {
+            clearTimeout(timer)
+            sessionReadyRef.current = false
+            reject(new Error('Simli ended session (STOP)'))
+            return
+          }
+          if (raw === 'MISSING_SESSION_TOKEN') {
+            ws.send(session_token)
+            return
+          }
+          // Silently ignore known non-JSON control strings
+          if (raw === 'SILENT' || raw === 'SPEAK' || raw === 'ACK') return
+
+          // ── Signalling messages (JSON) ─────────────────────────────────
+          try {
+            const msg = JSON.parse(raw)
+            if (msg.type === 'answer') {
+              await pc.setRemoteDescription(new RTCSessionDescription(msg))
+              console.log('[Simli] SDP answer set ✓')
+            } else if (msg.type === 'candidate' && msg.candidate) {
+              await pc.addIceCandidate(new RTCIceCandidate({
+                candidate: msg.candidate,
+                sdpMLineIndex: msg.sdpMLineIndex,
+                sdpMid: msg.sdpMid,
+              }))
+            }
+          } catch (e) {
+            console.warn('[Simli] WS message parse error:', e.message)
+          }
+        })
+
+        ws.addEventListener('error', (e) => {
+          clearTimeout(timer)
+          reject(new Error(`Simli WebSocket error: ${e.message || 'connection refused'}`))
+        })
+
+        ws.addEventListener('close', (evt) => {
+          sessionReadyRef.current = false
+          if (!isConnected) {
+            reject(new Error(`WS closed before START (code ${evt.code})`))
+          } else {
+            setIsConnected(false)
+            onDisconnected?.()
+          }
+        })
+      })
+
     } catch (err) {
-      console.error('[Simli] ❌ Connection failed:', err)
-      setError(err?.message || 'Simli connection failed')
+      console.error('[Simli] ❌ Connection failed:', err.message)
+      setError(err.message)
       setIsLoading(false)
       setIsConnected(false)
+      cleanup()
       onDisconnected?.()
-      clientRef.current = null
     }
-  }, [apiKey, faceId, isLoading, isConnected, onConnected, onDisconnected])
+  }, [apiKey, faceId, isLoading, isConnected, onConnected, onDisconnected, cleanup])
 
   // ── sendPcm24kHz ──────────────────────────────────────────────────────────
-  /**
-   * Forward PCM audio from Gemini (24 kHz ArrayBuffer) to Simli (16 kHz).
-   * Call this every time a PCM chunk arrives from the WebSocket, alongside
-   * audio.playPcm() which feeds the AudioWorklet for amplitude tracking.
-   *
-   * @param {ArrayBuffer} arrayBuffer  — PCM16 @ 24 kHz from Gemini
-   */
+  //
+  // *** THE CRITICAL FIX ***
+  // Audio must be sent via ws.send(binary) — NOT dc.send().
+  // This matches the official simli-client sendAudioData() exactly:
+  //   this.webSocket.send(audioData)
+  //
+  // Empty deps array: reads wsRef / sessionReadyRef at call-time (always fresh).
+  // No stale-closure issues — same function instance captured by ws.onmessage.
+  //
   const sendPcm24kHz = useCallback((arrayBuffer) => {
-    if (!clientRef.current || !isConnected) return
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    if (!sessionReadyRef.current) return   // don't send before START
     try {
-      const pcm16kHz = downsample24to16(arrayBuffer)
-      clientRef.current.sendAudioData(pcm16kHz)
-    } catch (err) {
-      // Log but don't throw — a dropped frame is better than crashing
-      console.warn('[Simli] sendAudioData error:', err)
+      ws.send(downsample24to16(arrayBuffer))   // binary frame → WebSocket
+    } catch (e) {
+      console.warn('[Simli] send error:', e.message)
     }
-  }, [isConnected])
+  }, [])  // empty deps — refs are read at call-time
 
   // ── close ─────────────────────────────────────────────────────────────────
-  /**
-   * Cleanly end the Simli session. Called when the user ends the session
-   * or when the component unmounts. Safe to call multiple times.
-   */
   const close = useCallback(() => {
-    if (!clientRef.current) return
-    try {
-      clientRef.current.close()
-    } catch { /* ignore */ }
-    clientRef.current = null
+    cleanup()
     setIsConnected(false)
     setIsLoading(false)
     onDisconnected?.()
-    console.log('[Simli] Session closed')
-  }, [onDisconnected])
+    console.log('[Simli] Closed')
+  }, [cleanup, onDisconnected])
 
-  // ── Cleanup on unmount ────────────────────────────────────────────────────
-  useEffect(() => {
-    return () => {
-      try { clientRef.current?.close() } catch { /* ignore */ }
-    }
-  }, [])
+  useEffect(() => () => cleanup(), [cleanup])
 
-  return {
-    // Refs — attach these to <video> and <audio> elements in JSX
-    videoRef,
-    audioRef,
-
-    // State
-    isConnected,
-    isLoading,
-    error,
-
-    // Actions
-    initialize,
-    sendPcm24kHz,
-    close,
-  }
+  return { videoRef, audioRef, isConnected, isLoading, error, initialize, sendPcm24kHz, close }
 }

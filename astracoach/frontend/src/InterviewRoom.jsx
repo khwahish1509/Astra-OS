@@ -5,20 +5,14 @@
  * coach, language tutor, sales coach, or any custom system prompt.
  *
  * Layout:
- *   LEFT  — Avatar (Simli photorealistic when connected; GeminiAvatar SVG fallback)
+ *   LEFT  — GeminiAvatar SVG (FFT-driven, real-time waveform + ring animations)
  *   RIGHT — User camera + live transcript + tool activity indicator
  *   TOP   — Timer, persona info, controls
  *
  * Audio flow:
- *   Mic → AudioWorklet → useAudioPipeline.sendPcm → WebSocket (binary)
- *   WebSocket binary → audio.playPcm → AudioWorklet → Speaker  (fallback / amplitude)
- *   WebSocket binary → simli.sendPcm24kHz → Simli WebRTC → <audio>  (avatar audio)
- *   AudioWorklet amplitude → GeminiAvatar audioLevel prop (used only when Simli is off)
- *
- * Simli avatar handoff:
- *   simli.onConnected    → audio.setPlaybackVolume(0)  — Simli WebRTC carries audio
- *   simli.onDisconnected → audio.setPlaybackVolume(1)  — AudioWorklet fallback resumes
- *   GainNode transition is click-free (60 ms exponential ramp)
+ *   Mic → AudioWorklet(capture) → WebSocket (binary PCM16)
+ *   WebSocket binary → AudioWorklet(playback) → GainNode → AnalyserNode → Speaker
+ *   AnalyserNode → GeminiAvatar (FFT at 60fps via requestAnimationFrame)
  *
  * Barge-in flow:
  *   onSpeechStart → activity_start WS msg → backend interrupts Gemini
@@ -27,23 +21,12 @@
  *
  * Vision flow:
  *   Camera → canvas → JPEG → WebSocket (JSON) → Backend → Gemini
- *
- * Hook ordering (important — avoids undefined-reference issues):
- *   1. useAudioPipeline  — no deps on other hooks
- *   2. useSimliAvatar    — onConnected/onDisconnected call audio.setPlaybackVolume
- *   3. useInterviewSession — onPcmReceived routes to both audio and simli
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import GeminiAvatar from './components/GeminiAvatar'
 import { useAudioPipeline }    from './hooks/useAudioPipeline'
-import { useSimliAvatar }      from './hooks/useSimliAvatar'
 import { useInterviewSession } from './hooks/useInterviewSession'
-
-// ── Simli API key ────────────────────────────────────────────────────────────
-// Set VITE_SIMLI_API_KEY in your .env to enable the photorealistic avatar.
-// If the key is absent the app silently falls back to the GeminiAvatar SVG.
-const SIMLI_API_KEY = import.meta.env.VITE_SIMLI_API_KEY || ''
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -51,60 +34,29 @@ export default function InterviewRoom({ session, onEnd }) {
   const { session_id, config, backendUrl } = session
 
   // ── UI state ─────────────────────────────────────────────────────────────
-  const [elapsed,        setElapsed]        = useState(0)
-  const [muted,          setMuted]          = useState(false)
-  const [camOn,          setCamOn]          = useState(true)
-  const [audioLevel,     setAudioLevel]     = useState(0)
-  const [started,        setStarted]        = useState(false)
-  const [ending,         setEnding]         = useState(false)
-  const [simliConnected, setSimliConnected] = useState(false)
+  const [elapsed,  setElapsed]  = useState(0)
+  const [muted,    setMuted]    = useState(false)
+  const [camOn,    setCamOn]    = useState(true)
+  const [started,  setStarted]  = useState(false)
+  const [ending,   setEnding]   = useState(false)
 
   const camVideoRef  = useRef(null)   // user's camera <video> element
   const camStreamRef = useRef(null)   // user's MediaStream (for cleanup)
 
-  // ── Simli availability check ──────────────────────────────────────────────
-  // Simli requires both an API key AND a face ID from the selected persona.
-  // If either is missing we render the GeminiAvatar SVG instead.
-  const simliEnabled = Boolean(SIMLI_API_KEY) && Boolean(config.simli_face_id)
-
   // ── 1. Audio pipeline ─────────────────────────────────────────────────────
-  // Defined first so simli (below) can reference audio.setPlaybackVolume.
   const audio = useAudioPipeline({
-    onPcmChunk:   (buf) => iv.sendPcm(buf),          // iv closure — valid at call-time
-    onAmplitude:  (amp) => setAudioLevel(amp),
-    onSpeechStart: ()   => iv.onSpeechStart?.(),     // barge-in start
-    onSpeechEnd:   ()   => iv.onSpeechEnd?.(),       // barge-in end
+    onPcmChunk:    (buf) => iv.sendPcm(buf),
+    onSpeechStart: ()    => iv.onSpeechStart?.(),
+    onSpeechEnd:   ()    => iv.onSpeechEnd?.(),
   })
 
-  // ── 2. Simli photorealistic avatar ────────────────────────────────────────
-  // onConnected   → mute AudioWorklet (Simli WebRTC carries audio from now on)
-  // onDisconnected → restore AudioWorklet (fallback / Simli offline)
-  const simli = useSimliAvatar({
-    apiKey: SIMLI_API_KEY,
-    faceId: config.simli_face_id || '',
-    onConnected: () => {
-      setSimliConnected(true)
-      audio.setPlaybackVolume(0)    // ← audio defined above — always valid
-    },
-    onDisconnected: () => {
-      setSimliConnected(false)
-      audio.setPlaybackVolume(1)    // ← restore AudioWorklet playback
-    },
-  })
-
-  // ── 3. WebSocket session ──────────────────────────────────────────────────
-  // onPcmReceived dual-routes PCM:
-  //   • audio.playPcm       — AudioWorklet (amplitude tracking + fallback speaker)
-  //   • simli.sendPcm24kHz  — Simli (downsample 24→16 kHz, lip-sync avatar)
+  // ── 2. WebSocket session ──────────────────────────────────────────────────
   const iv = useInterviewSession({
-    sessionId:    session_id,
-    wsBaseUrl:    backendUrl,
-    onPcmReceived: (buf) => {
-      audio.playPcm(buf)           // always feed worklet for amplitude
-      simli.sendPcm24kHz(buf)      // Simli no-ops when not connected
-    },
-    onInterrupted: () => audio.flushPcm(),    // barge-in: drop queued audio
-    onResumeAudio: () => audio.resumePcm(),   // barge-in done: re-open worklet gate
+    sessionId:     session_id,
+    wsBaseUrl:     backendUrl,
+    onPcmReceived: (buf) => audio.playPcm(buf),
+    onInterrupted: ()    => audio.flushPcm(),
+    onResumeAudio: ()    => audio.resumePcm(),
   })
 
   // Wire user camera element into session hook (for JPEG frame capture)
@@ -122,7 +74,6 @@ export default function InterviewRoom({ session, onEnd }) {
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 
   // ── Start session ─────────────────────────────────────────────────────────
-  // Must be triggered by a user gesture so AudioContext and WebRTC are allowed.
   const handleStart = useCallback(async () => {
     // 1. Start audio pipeline (opens AudioContext at 16 / 24 kHz)
     await audio.start()
@@ -140,15 +91,8 @@ export default function InterviewRoom({ session, onEnd }) {
     // 3. Connect to Gemini Live via WebSocket
     iv.connect()
 
-    // 4. Start Simli WebRTC session (must happen after user gesture)
-    //    Simli streams a lip-synced video + audio back via WebRTC.
-    //    No-op when simliEnabled is false (missing API key / face ID).
-    if (simliEnabled) {
-      simli.initialize()
-    }
-
     setStarted(true)
-  }, [audio, iv, simli, simliEnabled])
+  }, [audio, iv])
 
   // ── Mute / unmute mic ─────────────────────────────────────────────────────
   const handleMute = () => {
@@ -160,10 +104,9 @@ export default function InterviewRoom({ session, onEnd }) {
   // ── End session ───────────────────────────────────────────────────────────
   const handleEnd = async () => {
     setEnding(true)
-    simli.close()                                               // close Simli WebRTC first
-    audio.stop()                                                // close AudioContexts
-    iv.disconnect()                                             // close WebSocket
-    camStreamRef.current?.getTracks().forEach(t => t.stop())   // release camera
+    audio.stop()
+    iv.disconnect()
+    camStreamRef.current?.getTracks().forEach(t => t.stop())
     try {
       await fetch(`${backendUrl}/api/session/${session_id}/end`, { method: 'POST' })
     } catch { /* ignore — session is ending anyway */ }
@@ -178,29 +121,10 @@ export default function InterviewRoom({ session, onEnd }) {
   // ── Derived display flags ─────────────────────────────────────────────────
   const avatarState    = !started ? 'idle' : iv.avatarState
   const showTranscript = iv.transcript.length > 0
-  const showSimliVideo = simliEnabled && simliConnected    // true → show Simli <video>
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div style={S.root}>
-
-      {/*
-       * ── Simli media elements ──────────────────────────────────────────────
-       * IMPORTANT: These MUST remain mounted at all times so that
-       * SimliClient.Initialize() has valid DOM refs when called.
-       * Visibility is controlled by CSS (display / opacity), NOT conditional
-       * rendering. Removing them from the DOM would break the WebRTC stream.
-       *
-       * The <video> is positioned to fill the avatar pane once Simli connects.
-       * The <audio> is always hidden — Simli routes audio through it.
-       */}
-      <video
-        ref={simli.videoRef}
-        autoPlay
-        playsInline
-        style={showSimliVideo ? S.simliVideoActive : S.simliVideoHidden}
-      />
-      <audio ref={simli.audioRef} autoPlay style={{ display: 'none' }} />
 
       {/* ── Top bar ───────────────────────────────────────────────────────── */}
       <div style={S.topBar} className="glass">
@@ -213,22 +137,6 @@ export default function InterviewRoom({ session, onEnd }) {
           )}
           {config.voice && (
             <span style={S.voiceBadge}>🔊 {config.voice}</span>
-          )}
-
-          {/* Simli status badge — visible only when the key is configured */}
-          {simliEnabled && started && (
-            simli.isLoading
-              ? <span style={S.simliBadge}>
-                  <span className="spin" style={S.simliBadgeSpin}>⟳</span>
-                  Avatar connecting…
-                </span>
-              : simliConnected
-                ? <span style={{ ...S.simliBadge, ...S.simliBadgeLive }}>
-                    <span style={S.simliBadgeDot} /> Avatar live
-                  </span>
-                : simli.error
-                  ? <span style={{ ...S.simliBadge, ...S.simliBadgeErr }}>⚠ Avatar offline</span>
-                  : null
           )}
         </div>
 
@@ -265,30 +173,11 @@ export default function InterviewRoom({ session, onEnd }) {
 
           {/* Avatar display area */}
           <div style={S.avatarCenter}>
-
-            {/*
-             * GeminiAvatar (SVG fallback) — always rendered so state machine
-             * stays active. Hidden behind Simli video when Simli is live.
-             * Audio level continues to update even when hidden.
-             */}
-            <div style={{ display: showSimliVideo ? 'none' : 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <GeminiAvatar
-                state={avatarState}
-                audioLevel={audioLevel}
-                name={config.persona_name || 'Agent'}
-              />
-            </div>
-
-            {/*
-             * Simli loading spinner — shown while WebRTC is being established.
-             * Rendered between "Allow Mic & Begin" click and stream becoming live.
-             */}
-            {simliEnabled && simli.isLoading && (
-              <div style={S.simliLoader}>
-                <div className="spin" style={S.simliLoaderRing} />
-                <span style={S.simliLoaderTxt}>Connecting avatar…</span>
-              </div>
-            )}
+            <GeminiAvatar
+              state={avatarState}
+              analyserNode={audio.analyserNode}
+              name={config.persona_name || 'Agent'}
+            />
 
             {/* Active tool indicator */}
             {iv.activeTool && (
@@ -317,18 +206,10 @@ export default function InterviewRoom({ session, onEnd }) {
                 <span>Allow Mic & Begin</span>
                 {audio.micError && <span style={S.micErr}>{audio.micError}</span>}
               </button>
-              {simliEnabled && (
-                <p style={S.startNote}>
-                  🎭 Photorealistic avatar enabled via Simli.ai<br />
-                  Microphone + camera access needed for live conversation.
-                </p>
-              )}
-              {!simliEnabled && (
-                <p style={S.startNote}>
-                  Microphone access is needed for live conversation.<br />
-                  Allow it in your browser when prompted.
-                </p>
-              )}
+              <p style={S.startNote}>
+                Microphone access is needed for live conversation.<br />
+                Allow it in your browser when prompted.
+              </p>
             </div>
           )}
 
@@ -465,49 +346,6 @@ const S = {
     height: '100vh', background: '#07070f', overflow: 'hidden',
   },
 
-  // ── Simli media elements ──────────────────────────────────────────────────
-  // Always mounted in the DOM (WebRTC ref requirement).
-  // simliVideoHidden: positioned off-screen + invisible. Simli can still attach
-  //   its WebRTC stream; we just don't show it yet.
-  // simliVideoActive: shown inside the avatar pane via absolute positioning.
-  simliVideoHidden: {
-    position: 'fixed',
-    top: 0, left: 0,
-    width: 1, height: 1,
-    opacity: 0,
-    pointerEvents: 'none',
-    zIndex: -1,
-  },
-  simliVideoActive: {
-    position: 'absolute',
-    top: '50%', left: '50%',
-    transform: 'translate(-50%, -50%)',
-    width: 280, height: 280,
-    borderRadius: '50%',              // circle crop — matches GeminiAvatar orb aesthetic
-    objectFit: 'cover',
-    border: '2px solid rgba(79,125,255,0.4)',
-    boxShadow: '0 0 40px rgba(79,125,255,0.2), 0 0 0 1px rgba(255,255,255,0.06)',
-    zIndex: 2,
-  },
-
-  // ── Simli loading spinner ──────────────────────────────────────────────────
-  simliLoader: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-    position: 'absolute',
-    top: '50%', left: '50%',
-    transform: 'translate(-50%, -50%)',
-    zIndex: 3,
-  },
-  simliLoaderRing: {
-    width: 40, height: 40,
-    border: '3px solid rgba(79,125,255,0.15)',
-    borderTop: '3px solid #4f7dff',
-    borderRadius: '50%',
-  },
-  simliLoaderTxt: {
-    fontSize: 12, color: 'rgba(147,197,253,0.7)',
-  },
-
   // ── Top bar ───────────────────────────────────────────────────────────────
   topBar: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -520,7 +358,7 @@ const S = {
     width: 7, height: 7, borderRadius: '50%',
     background: 'linear-gradient(135deg,#4f7dff,#a855f7)',
   },
-  brand: { fontSize: 14, fontWeight: 700, color: '#eef0fa' },
+  brand:      { fontSize: 14, fontWeight: 700, color: '#eef0fa' },
   badge: {
     fontSize: 11, background: 'rgba(79,125,255,0.1)', padding: '2px 9px',
     borderRadius: 6, color: 'rgba(147,197,253,0.8)', border: '1px solid rgba(79,125,255,0.2)',
@@ -529,27 +367,6 @@ const S = {
     fontSize: 11, background: 'rgba(168,85,247,0.08)', padding: '2px 9px',
     borderRadius: 6, color: 'rgba(196,181,253,0.7)', border: '1px solid rgba(168,85,247,0.18)',
   },
-
-  // Simli status badges
-  simliBadge: {
-    display: 'flex', alignItems: 'center', gap: 5,
-    fontSize: 11, background: 'rgba(79,125,255,0.07)', padding: '2px 9px',
-    borderRadius: 6, color: 'rgba(147,197,253,0.6)', border: '1px solid rgba(79,125,255,0.15)',
-  },
-  simliBadgeLive: {
-    background: 'rgba(34,197,94,0.07)', color: 'rgba(134,239,172,0.8)',
-    border: '1px solid rgba(34,197,94,0.2)',
-  },
-  simliBadgeErr: {
-    background: 'rgba(239,68,68,0.07)', color: 'rgba(252,165,165,0.7)',
-    border: '1px solid rgba(239,68,68,0.2)',
-  },
-  simliBadgeSpin:  { display: 'inline-block', fontSize: 12 },
-  simliBadgeDot: {
-    width: 6, height: 6, borderRadius: '50%', background: '#22c55e',
-    display: 'inline-block', animation: 'dotPulse 1s ease-in-out infinite',
-  },
-
   timer: {
     fontSize: 20, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
     color: '#eef0fa', letterSpacing: '0.04em',
@@ -572,7 +389,7 @@ const S = {
   avatarPane: {
     flex: 1, display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center',
-    position: 'relative',                               // anchors Simli video + overlays
+    position: 'relative',
     background: '#07070f',
     borderRight: '1px solid rgba(255,255,255,0.05)',
   },
@@ -589,7 +406,7 @@ const S = {
   },
   avatarCenter: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
-    position: 'relative',  // needed so simliVideoActive (absolute) positions inside
+    position: 'relative',
   },
   toolPill: {
     display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
