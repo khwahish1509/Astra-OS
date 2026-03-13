@@ -26,28 +26,28 @@
  *   audio.analyserNode  — Web Audio AnalyserNode for FFT avatar (null until start())
  */
 
-import { useRef, useCallback, useState } from 'react'
+import { useRef, useCallback, useState, useMemo } from 'react'
 
-const CAPTURE_SAMPLE_RATE  = 16000   // Gemini input requires 16 kHz
+const CAPTURE_SAMPLE_RATE = 16000   // Gemini input requires 16 kHz
 const PLAYBACK_SAMPLE_RATE = 24000   // Gemini output is 24 kHz
 
 export function useAudioPipeline({ onPcmChunk, onSpeechStart, onSpeechEnd }) {
-  const captureCtx    = useRef(null)
-  const playbackCtx   = useRef(null)
-  const captureNode   = useRef(null)
-  const playbackNode  = useRef(null)
-  const gainNodeRef   = useRef(null)
-  const analyserRef   = useRef(null)
-  const sourceNode    = useRef(null)
-  const micStream     = useRef(null)
-  const muted         = useRef(false)
+  const captureCtx = useRef(null)
+  const playbackCtx = useRef(null)
+  const captureNode = useRef(null)
+  const playbackNode = useRef(null)
+  const gainNodeRef = useRef(null)
+  const analyserRef = useRef(null)
+  const sourceNode = useRef(null)
+  const micStream = useRef(null)
+  const muted = useRef(false)
 
-  const [isReady,      setIsReady]      = useState(false)
-  const [micError,     setMicError]     = useState('')
+  const [isReady, setIsReady] = useState(false)
+  const [micError, setMicError] = useState('')
   const [analyserNode, setAnalyserNode] = useState(null)  // exposed for GeminiAvatar FFT
 
   // ── VAD state ───────────────────────────────────────────────────
-  const speechRef         = useRef(false)
+  const speechRef = useRef(false)
   const silenceCounterRef = useRef(0)
 
   // ── Start ───────────────────────────────────────────────────────
@@ -56,11 +56,11 @@ export function useAudioPipeline({ onPcmChunk, onSpeechStart, onSpeechEnd }) {
       // 1. Request microphone
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          sampleRate:       CAPTURE_SAMPLE_RATE,
-          channelCount:     1,
+          sampleRate: CAPTURE_SAMPLE_RATE,
+          channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl:  true,
+          autoGainControl: true,
         },
         video: false,
       })
@@ -118,7 +118,7 @@ export function useAudioPipeline({ onPcmChunk, onSpeechStart, onSpeechEnd }) {
       //    fftSize=256 → 128 bins @ 24kHz = 93.75 Hz/bin resolution
       //    smoothingTimeConstant=0.75 → gentle temporal smoothing
       const analyser = playbackCtx.current.createAnalyser()
-      analyser.fftSize               = 256
+      analyser.fftSize = 256
       analyser.smoothingTimeConstant = 0.75
       gainNode.connect(analyser)
       analyser.connect(playbackCtx.current.destination)
@@ -143,16 +143,16 @@ export function useAudioPipeline({ onPcmChunk, onSpeechStart, onSpeechEnd }) {
     playbackNode.current?.disconnect()
     gainNodeRef.current?.disconnect()
     analyserRef.current?.disconnect()
-    await captureCtx.current?.close().catch(() => {})
-    await playbackCtx.current?.close().catch(() => {})
-    captureCtx.current   = null
-    playbackCtx.current  = null
-    captureNode.current  = null
+    await captureCtx.current?.close().catch(() => { })
+    await playbackCtx.current?.close().catch(() => { })
+    captureCtx.current = null
+    playbackCtx.current = null
+    captureNode.current = null
     playbackNode.current = null
-    gainNodeRef.current  = null
-    analyserRef.current  = null
-    sourceNode.current   = null
-    micStream.current    = null
+    gainNodeRef.current = null
+    analyserRef.current = null
+    sourceNode.current = null
+    micStream.current = null
     setIsReady(false)
     setAnalyserNode(null)
   }, [])
@@ -160,10 +160,14 @@ export function useAudioPipeline({ onPcmChunk, onSpeechStart, onSpeechEnd }) {
   // ── Play PCM from Gemini ─────────────────────────────────────────
   const playPcm = useCallback((arrayBuffer) => {
     if (!playbackNode.current) return
+    if (arrayBuffer.byteLength === 0) {
+      console.warn('[AudioPipeline] Skipping playPcm: ArrayBuffer is detached (0 bytes)')
+      return
+    }
     try {
       playbackNode.current.port.postMessage(arrayBuffer, [arrayBuffer])
     } catch {
-      // Fallback: copy if ArrayBuffer is already detached
+      // Fallback: copy if ArrayBuffer is already detached or transfer fails
       playbackNode.current.port.postMessage(arrayBuffer)
     }
   }, [])
@@ -183,22 +187,33 @@ export function useAudioPipeline({ onPcmChunk, onSpeechStart, onSpeechEnd }) {
     muted.current = val
   }, [])
 
+  // ── Mute / Unmute local playback (e.g. when Simli takes over audio) ─
+  const setPlaybackMuted = useCallback((val) => {
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = val ? 0 : 1.0
+    }
+  }, [])
+
   // ── Resume AudioContext (required after first user gesture) ──────
   const resume = useCallback(async () => {
     await captureCtx.current?.resume()
     await playbackCtx.current?.resume()
   }, [])
 
-  return {
+  return useMemo(() => ({
     start,
     stop,
     playPcm,
     flushPcm,
     resumePcm,
     setMuted,
+    setPlaybackMuted,
     resume,
     isReady,
     micError,
-    analyserNode,   // ← Web Audio AnalyserNode for FFT-driven avatar
-  }
+    analyserNode,
+  }), [
+    start, stop, playPcm, flushPcm, resumePcm, setMuted,
+    setPlaybackMuted, resume, isReady, micError, analyserNode
+  ])
 }

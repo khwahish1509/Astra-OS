@@ -153,8 +153,9 @@ export default function SetupScreen({ onStart }) {
   const [voice,       setVoice]       = useState('Aoede')
   const [voices,      setVoices]      = useState([])
   const [tab,         setTab]         = useState('templates')  // 'templates' | 'editor'
-  const [loading,     setLoading]     = useState(false)
-  const [error,       setError]       = useState('')
+  const [loading,      setLoading]     = useState(false)
+  const [loadingStep,  setLoadingStep] = useState(null)   // 'avatar' | 'session' | null
+  const [error,        setError]       = useState('')
 
   useEffect(() => {
     fetch(`${BACKEND}/api/voices`)
@@ -172,12 +173,40 @@ export default function SetupScreen({ onStart }) {
 
   const handleStart = async () => {
     if (!prompt.trim()) { setError('Please write a persona prompt.'); return }
-    setError(''); setLoading(true)
+    setError('')
+    setLoading(true)
+
+    // ── Phase 1: Generate AI portrait avatar via Imagen 3 ─────────────────
+    // Non-fatal: if this fails we fall back to the SVG orb avatar gracefully.
+    let avatarImage = null
+    setLoadingStep('avatar')
+    try {
+      const avatarRes = await fetch(`${BACKEND}/api/generate-avatar`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          persona_description: personaName.trim() || 'a professional AI assistant',
+        }),
+      })
+      if (avatarRes.ok) {
+        const avatarData = await avatarRes.json()
+        avatarImage = avatarData.image || null
+        console.log('[SetupScreen] ✅ Portrait generated via', avatarData.model)
+      } else {
+        console.warn('[SetupScreen] Avatar API returned', avatarRes.status, '— using SVG fallback')
+      }
+    } catch (e) {
+      // Network error or backend not running — non-fatal, just use SVG orb
+      console.warn('[SetupScreen] Avatar generation failed (SVG fallback):', e.message)
+    }
+
+    // ── Phase 2: Create the live agent session ────────────────────────────
+    setLoadingStep('session')
     try {
       const res = await fetch(`${BACKEND}/api/session/create`, {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body:    JSON.stringify({
           persona_name:  personaName.trim() || 'AI Agent',
           system_prompt: prompt.trim(),
           voice,
@@ -189,11 +218,13 @@ export default function SetupScreen({ onStart }) {
         throw new Error(e.detail || 'Server error')
       }
       const data = await res.json()
-      onStart({ ...data, backendUrl: BACKEND })
+      // Pass avatarImage alongside the session data — InterviewRoom picks it up
+      onStart({ ...data, backendUrl: BACKEND, avatarImage })
     } catch (e) {
       setError(e.message || 'Failed — is the backend running?')
     } finally {
       setLoading(false)
+      setLoadingStep(null)
     }
   }
 
@@ -331,14 +362,16 @@ export default function SetupScreen({ onStart }) {
 
           <button style={{ ...S.launchBtn, ...(loading ? S.launchLoading : {}) }}
             onClick={handleStart} disabled={loading}>
-            {loading
+            {loadingStep === 'avatar'
+              ? <><span style={S.spinner} className="spin" /> Generating portrait via Imagen 3…</>
+              : loadingStep === 'session'
               ? <><span style={S.spinner} className="spin" /> Launching agent…</>
               : <><span>🚀</span> Launch {personaName || 'Agent'}</>
             }
           </button>
 
           <div style={S.footer}>
-            Gemini 2.5 Flash Native Audio · Google ADK · Tri-Agent Routing · Cloud Run
+            Gemini 2.5 Flash Native Audio · Imagen 3 Avatar · ADK Tri-Agent · Cloud Run
           </div>
         </div>
       </div>

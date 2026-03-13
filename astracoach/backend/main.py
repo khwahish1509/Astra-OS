@@ -41,6 +41,10 @@ load_dotenv()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
 
+# Avatar generation model — confirmed working high-fidelity image models
+# Standard Imagen 4 model is: imagen-4.0-generate-001
+AVATAR_MODEL = os.getenv("AVATAR_MODEL", "imagen-4.0-generate-001")
+
 # ─────────────────────────────────────────────
 # App lifecycle
 # ─────────────────────────────────────────────
@@ -93,6 +97,10 @@ class EndSessionRequest(BaseModel):
     session_id: str
 
 
+class GenerateAvatarRequest(BaseModel):
+    persona_description: str = "a professional AI assistant"
+
+
 # Available Gemini Live voices (for UI dropdown)
 AVAILABLE_VOICES = [
     {"id": "Aoede",  "label": "Aoede  — Warm, natural"},
@@ -114,6 +122,130 @@ AVAILABLE_VOICES = [
 async def list_voices():
     """Return available Gemini Live voices."""
     return {"voices": AVAILABLE_VOICES}
+
+
+@app.post("/api/generate-avatar")
+async def generate_avatar(req: GenerateAvatarRequest):
+    """
+    Generate a photorealistic AI portrait for the session avatar.
+
+    Uses Imagen 3 (imagen-3.0-generate-002) as primary model — the high-fidelity
+    "Nano Banana Pro" image model. Falls back to Gemini 2.0 Flash image generation
+    if Imagen is unavailable for the API key.
+
+    Returns:
+        { success: true, image: "<base64_string>", mime_type: "image/png", model: "<model_used>" }
+
+    The base64 string is a raw PNG/JPEG with no data-URI prefix — the frontend
+    constructs `data:<mime>;base64,<image>` for the canvas Image object.
+    """
+    if not GOOGLE_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="GOOGLE_API_KEY not configured. Cannot generate avatar.",
+        )
+
+    description = (req.persona_description or "a professional AI assistant").strip()
+
+    # Craft a prompt optimised for portrait lip-sync:
+    #   - Neutral CLOSED mouth is critical — the JS canvas animation opens it
+    #   - Front-facing is critical — side profiles break the face-slice technique
+    #   - Plain background prevents visual noise behind the avatar rings
+    prompt = (
+        f"A photorealistic, front-facing portrait of {description}. "
+        "Professional studio lighting, clean neutral dark grey background. "
+        "Subject looking directly at the camera with a neutral resting expression "
+        "and lips closed in a relaxed, natural position. "
+        "Sharp focus on the face, cinematic quality headshot."
+    )
+
+    from google import genai as _genai
+    from google.genai import types as _gtypes
+
+    client = _genai.Client(api_key=GOOGLE_API_KEY)
+
+    # ── Attempt 1: Imagen 3 / 4 (high quality) ───────────────────────────
+    try:
+        print(f"[Avatar] Generating portrait with {AVATAR_MODEL} — desc: {description[:50]}")
+        response = client.models.generate_images(
+            model=AVATAR_MODEL,
+            prompt=prompt,
+            config=_gtypes.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio="1:1",
+                safety_filter_level="block_low_and_above",
+                person_generation="allow_adult",
+            ),
+        )
+        if not response.generated_images:
+            raise ValueError(f"Imagen {AVATAR_MODEL} returned no images")
+            
+        img_bytes = response.generated_images[0].image.image_bytes
+        b64 = base64.b64encode(img_bytes).decode("utf-8")
+        print(f"[Avatar] ✅ Portrait generated ({len(img_bytes):,} bytes) via {AVATAR_MODEL}")
+        return {
+            "success":   True,
+            "image":     b64,
+            "mime_type": "image/png",
+            "model":     AVATAR_MODEL,
+        }
+
+    except Exception as img_err:
+        print(f"[Avatar] {AVATAR_MODEL} failed ({img_err.__class__.__name__}: {img_err})")
+        # Try fast fallback if standard imagen failed
+        if AVATAR_MODEL == "imagen-4.0-generate-001":
+            try:
+                print("[Avatar] Trying fast fallback: imagen-4.0-fast-generate-001")
+                response = client.models.generate_images(
+                    model="imagen-4.0-fast-generate-001",
+                    prompt=prompt,
+                    config=_gtypes.GenerateImagesConfig(
+                        number_of_images=1,
+                        aspect_ratio="1:1",
+                    ),
+                )
+                img_bytes = response.generated_images[0].image.image_bytes
+                b64 = base64.b64encode(img_bytes).decode("utf-8")
+                return {
+                    "success": True, "image": b64, 
+                    "mime_type": "image/png", "model": "imagen-4.0-fast-generate-001"
+                }
+            except: pass
+
+    # ── Attempt 2: Gemini 2.5/2.0 Flash with image output ─────────────────
+    # Native multimodal generation fallback
+    for fallback_model in ["gemini-2.5-flash-image", "gemini-2.0-flash"]:
+        try:
+            print(f"[Avatar] Trying fallback model: {fallback_model}")
+            response = client.models.generate_content(
+                model=fallback_model,
+                contents=prompt,
+                config=_gtypes.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                ),
+            )
+            # Find image part in candidates
+            for candidate in getattr(response, 'candidates', []):
+                for part in getattr(candidate.content, 'parts', []):
+                    # Check for inline_data (SDK v1.x)
+                    if hasattr(part, 'inline_data') and part.inline_data:
+                        img_bytes = part.inline_data.data
+                        mime = part.inline_data.mime_type or "image/png"
+                        b64 = base64.b64encode(img_bytes).decode("utf-8")
+                        print(f"[Avatar] ✅ Portrait generated via {fallback_model}")
+                        return {
+                            "success": True, "image": b64, 
+                            "mime_type": mime, "model": fallback_model
+                        }
+                    # Check for external_data or other part types if SDK changes
+        except Exception as gem_err:
+            print(f"[Avatar] Fallback {fallback_model} failed: {gem_err}")
+
+    # If we got here, everything failed
+    raise HTTPException(
+        status_code=500,
+        detail="Avatar generation failed across all models. Please ensure your API key has Image generation enabled.",
+    )
 
 
 @app.post("/api/session/create")
@@ -198,7 +330,8 @@ async def interview_websocket(ws: WebSocket, session_id: str):
 
     Text frames (JSON):
       browser → server:
-        {"type":"frame",    "data":"<base64-jpeg>"}    camera frame
+        {"type":"frame",    "data":"<base64-jpeg>"}                      camera frame (320×240)
+        {"type":"image",    "mimeType":"image/jpeg","data":"<b64>"}       full-desktop screen share (768×768)
         {"type":"text",     "text":"..."}              text injection
         {"type":"end_turn"}                            explicit EOT
         {"type":"ping"}
@@ -267,7 +400,24 @@ async def interview_websocket(ws: WebSocket, session_id: str):
                                 "type": "frame",
                                 "data": jpeg_bytes,
                             })
-                            store.update_vision(session_id, "frame received")
+                            store.update_vision(session_id, "camera frame received")
+
+                    elif msg_type == "image":
+                        # Full-desktop screen share frame (768×768 squished JPEG).
+                        # Distinct from camera "frame":
+                        #   - Forwarded to Gemini Live as a realtime JPEG blob (ambient awareness)
+                        #   - Also cached on the bridge so the ReasoningAgent can access
+                        #     the latest full-res JPEG when asked to "read this code"
+                        raw       = data.get("data", "")
+                        mime_type = data.get("mimeType", "image/jpeg")
+                        if raw:
+                            jpeg_bytes = base64.b64decode(raw)
+                            await bridge.push({
+                                "type":      "image",
+                                "data":      jpeg_bytes,
+                                "mime_type": mime_type,
+                            })
+                            store.update_vision(session_id, "screen frame received")
 
                     elif msg_type == "text":
                         await bridge.push(data)

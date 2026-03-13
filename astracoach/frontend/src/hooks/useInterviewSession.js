@@ -30,7 +30,20 @@ export function useInterviewSession({
   const wsRef = useRef(null)
   const frameTimerRef = useRef(null)
   const videoRef = useRef(null)   // set externally via setVideoRef
+
+  // Callback refs to prevent stale enclosures in WebSocket listeners
+  const onPcmReceivedRef = useRef(onPcmReceived)
+  const onInterruptedRef = useRef(onInterrupted)
+  const onResumeAudioRef = useRef(onResumeAudio)
+
+  useEffect(() => {
+    onPcmReceivedRef.current = onPcmReceived
+    onInterruptedRef.current = onInterrupted
+    onResumeAudioRef.current = onResumeAudio
+  }, [onPcmReceived, onInterrupted, onResumeAudio])
   const canvasRef = useRef(document.createElement('canvas'))
+  // When true, the 1-FPS camera frame loop is paused (screen share has taken over)
+  const framesPausedRef = useRef(false)
 
   const [wsState, setWsState] = useState('idle')  // idle|connecting|ready|active|ended
   const [avatarState, setAvatarState] = useState('idle')  // idle|listening|thinking|speaking
@@ -81,7 +94,7 @@ export function useInterviewSession({
     ws.onmessage = (evt) => {
       if (evt.data instanceof ArrayBuffer) {
         // Binary = PCM16 audio from Gemini → play it
-        onPcmReceived?.(evt.data)
+        onPcmReceivedRef.current?.(evt.data)
       } else {
         // Text = JSON control message
         try {
@@ -123,14 +136,14 @@ export function useInterviewSession({
         break
 
       case 'interrupted':
-        onInterrupted?.()
+        onInterruptedRef.current?.()
         break
 
       case 'status':
         setAvatarState(msg.state || 'idle')
         // Re-open the audio worklet gate when agent is in listening state
         if (msg.state === 'listening') {
-          onResumeAudio?.()
+          onResumeAudioRef.current?.()
         }
         break
 
@@ -160,6 +173,8 @@ export function useInterviewSession({
 
   // ── Send camera frame ─────────────────────────────────────────
   const _sendCameraFrame = useCallback(() => {
+    // Yield to screen share when it is active — avoids two concurrent frame streams
+    if (framesPausedRef.current) return
     const ws = wsRef.current
     const vid = videoRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN || !vid) return
@@ -181,6 +196,21 @@ export function useInterviewSession({
       ws.send(pcmBuffer)
     }
   }, [])
+
+  // ── Screen share frame sender ─────────────────────────────────
+  // Called by useScreenShareCropper every 1000ms with a bare base64 JPEG of
+  // the full squished desktop (768×768). Uses type "image" (distinct from
+  // camera "frame") so main.py can cache it for the ReasoningAgent.
+  const sendScreenFrame = useCallback((b64) => {
+    const ws = wsRef.current
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'image', mimeType: 'image/jpeg', data: b64 }))
+    }
+  }, [])
+
+  // ── Pause / resume camera frame loop (for screen share handoff) ──
+  const pauseCameraFrames = useCallback(() => { framesPausedRef.current = true }, [])
+  const resumeCameraFrames = useCallback(() => { framesPausedRef.current = false }, [])
 
   // ── Inject vision note explicitly ─────────────────────────────
   const injectVision = useCallback((note) => {
@@ -207,6 +237,9 @@ export function useInterviewSession({
     connect,
     disconnect,
     sendPcm,
+    sendScreenFrame,
+    pauseCameraFrames,
+    resumeCameraFrames,
     injectVision,
     setVideoRef,
     wsState,

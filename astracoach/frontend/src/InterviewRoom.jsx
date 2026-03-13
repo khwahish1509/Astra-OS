@@ -5,64 +5,132 @@
  * coach, language tutor, sales coach, or any custom system prompt.
  *
  * Layout:
- *   LEFT  — GeminiAvatar SVG (FFT-driven, real-time waveform + ring animations)
+ *   LEFT  — Avatar pane:
+ *             • Simli real-time talking avatar (when VITE_SIMLI_API_KEY is set)
+ *             • GeminiAvatar FFT orb / Imagen 3 portrait (fallback)
  *   RIGHT — User camera + live transcript + tool activity indicator
  *   TOP   — Timer, persona info, controls
  *
  * Audio flow:
  *   Mic → AudioWorklet(capture) → WebSocket (binary PCM16)
  *   WebSocket binary → AudioWorklet(playback) → GainNode → AnalyserNode → Speaker
- *   AnalyserNode → GeminiAvatar (FFT at 60fps via requestAnimationFrame)
+ *   WebSocket binary → Simli sendPcm24kHz → Simli WebRTC → avatar video (lip sync)
+ *   AnalyserNode → GeminiAvatar (FFT at 60fps via requestAnimationFrame, fallback mode)
  *
- * Barge-in flow:
- *   onSpeechStart → activity_start WS msg → backend interrupts Gemini
- *   onInterrupted → flushPcm (drain playback queue immediately)
- *   onResumeAudio → resumePcm (re-open worklet gate after barge-in)
- *
- * Vision flow:
- *   Camera → canvas → JPEG → WebSocket (JSON) → Backend → Gemini
+ * Simli avatar:
+ *   When VITE_SIMLI_API_KEY is configured, a photorealistic talking head
+ *   is streamed in real-time via WebRTC.  Every PCM chunk from Gemini is
+ *   forwarded to Simli (downsampled 24→16 kHz) to drive lip sync.
+ *   Simli's own audio track is MUTED — we play audio via our own pipeline
+ *   so the AnalyserNode, FFT rings, and interruption logic all still work.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import GeminiAvatar from './components/GeminiAvatar'
-import { useAudioPipeline }    from './hooks/useAudioPipeline'
+import { useAudioPipeline } from './hooks/useAudioPipeline'
 import { useInterviewSession } from './hooks/useInterviewSession'
+import { useScreenShareCropper } from './hooks/useScreenShareCropper'
+import { useSimliAvatar } from './hooks/useSimliAvatar'
 
-// ── Component ────────────────────────────────────────────────────────────────
+// ── Simli config — set in .env.local ─────────────────────────────────────────
+const SIMLI_API_KEY = import.meta.env.VITE_SIMLI_API_KEY || ''
+const SIMLI_FACE_ID = import.meta.env.VITE_SIMLI_FACE_ID || 'tmp9i8bbq7c'
+const SIMLI_ENABLED = Boolean(SIMLI_API_KEY)
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function InterviewRoom({ session, onEnd }) {
-  const { session_id, config, backendUrl } = session
+  const { session_id, config, backendUrl, avatarImage } = session
 
   // ── UI state ─────────────────────────────────────────────────────────────
-  const [elapsed,  setElapsed]  = useState(0)
-  const [muted,    setMuted]    = useState(false)
-  const [camOn,    setCamOn]    = useState(true)
-  const [started,  setStarted]  = useState(false)
-  const [ending,   setEnding]   = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const [muted, setMuted] = useState(false)
+  const [camOn, setCamOn] = useState(true)
+  const [started, setStarted] = useState(false)
+  const [ending, setEnding] = useState(false)
 
-  const camVideoRef  = useRef(null)   // user's camera <video> element
+  const camVideoRef = useRef(null)   // user's camera <video> element
   const camStreamRef = useRef(null)   // user's MediaStream (for cleanup)
+
+  // ── Simli cross-hook ref ──────────────────────────────────────────────────
+  // sendPcm24kHz is safe to call even before Simli connects (it no-ops).
+  // We store the Simli instance in a ref so onPcmReceived (defined before
+  // the simli hook) can always access the latest instance.
+  const simliRef = useRef({})
 
   // ── 1. Audio pipeline ─────────────────────────────────────────────────────
   const audio = useAudioPipeline({
-    onPcmChunk:    (buf) => iv.sendPcm(buf),
-    onSpeechStart: ()    => iv.onSpeechStart?.(),
-    onSpeechEnd:   ()    => iv.onSpeechEnd?.(),
+    onPcmChunk: (buf) => iv.sendPcm(buf),
+    onSpeechStart: () => iv.onSpeechStart?.(),
+    onSpeechEnd: () => iv.onSpeechEnd?.(),
   })
 
   // ── 2. WebSocket session ──────────────────────────────────────────────────
   const iv = useInterviewSession({
-    sessionId:     session_id,
-    wsBaseUrl:     backendUrl,
-    onPcmReceived: (buf) => audio.playPcm(buf),
-    onInterrupted: ()    => audio.flushPcm(),
-    onResumeAudio: ()    => audio.resumePcm(),
+    sessionId: session_id,
+    wsBaseUrl: backendUrl,
+    onPcmReceived: (buf) => {
+      if (simli.isConnected) {
+        // EXCLUSIVE PATH: Forward to Simli only.
+        // This prevents overlapping audio nodes from affecting timing/speed.
+        simliRef.current?.sendPcm24kHz?.(buf)
+      } else {
+        // FALLBACK PATH: Play Gemini audio through our local pipeline
+        audio.playPcm(buf)
+      }
+    },
+    onInterrupted: () => {
+      audio.flushPcm()
+      simliRef.current?.clearBuffer?.()
+    },
+    onResumeAudio: () => audio.resumePcm(),
   })
+
+  // ── 3. Screen share smart cropper ────────────────────────────────────────
+  const screenshare = useScreenShareCropper({
+    sendFrame: iv.sendScreenFrame,
+  })
+
+  // Pause / resume camera frame loop when screen share state changes
+  useEffect(() => {
+    if (screenshare.isActive) {
+      iv.pauseCameraFrames()
+    } else {
+      iv.resumeCameraFrames()
+    }
+  }, [screenshare.isActive, iv])
 
   // Wire user camera element into session hook (for JPEG frame capture)
   useEffect(() => {
     if (camVideoRef.current) iv.setVideoRef(camVideoRef.current)
   }, [iv])
+
+  // ── 4. Simli real-time avatar ─────────────────────────────────────────────
+  const simli = useSimliAvatar({
+    apiKey: SIMLI_API_KEY,
+    faceId: SIMLI_FACE_ID,
+    onConnected: () => console.log('[Simli] ✅ Talking avatar connected'),
+    onDisconnected: () => console.log('[Simli] Avatar disconnected'),
+  })
+
+  // Keep simliRef in sync so onPcmReceived always uses the latest instance
+  simliRef.current = simli
+
+  // ── Pre-warm Simli on mount ────────────────────────────────────────────────
+  // Start the Simli connection immediately when the component mounts — NOT
+  // when the user clicks "Begin".  Reason: livekit video takes ~10-25 seconds
+  // to start streaming on first connect; pre-warming eliminates that wait so
+  // the avatar is ready by the time the user starts talking.
+  //
+  // initialize() is one-shot (hasAttemptedRef guard), so calling it again in
+  // handleStart() is a harmless no-op if it already ran here.
+  useEffect(() => {
+    if (SIMLI_ENABLED) {
+      simli.initialize().catch(err =>
+        console.warn('[Simli] Pre-warm failed (will retry on Begin):', err?.message)
+      )
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Timer ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -91,8 +159,16 @@ export default function InterviewRoom({ session, onEnd }) {
     // 3. Connect to Gemini Live via WebSocket
     iv.connect()
 
+    // 4. Initialize Simli avatar (if API key is configured)
+    //    Non-fatal — if Simli fails, we fall back to GeminiAvatar orb
+    if (SIMLI_ENABLED) {
+      simli.initialize().catch(err =>
+        console.warn('[Simli] Avatar init failed (using fallback):', err.message)
+      )
+    }
+
     setStarted(true)
-  }, [audio, iv])
+  }, [audio, iv, simli])
 
   // ── Mute / unmute mic ─────────────────────────────────────────────────────
   const handleMute = () => {
@@ -101,11 +177,22 @@ export default function InterviewRoom({ session, onEnd }) {
     audio.setMuted(next)
   }
 
+  // ── Toggle screen share ───────────────────────────────────────────────────
+  const handleScreenShare = useCallback(async () => {
+    if (screenshare.isActive) {
+      screenshare.stop()
+    } else {
+      await screenshare.start()
+    }
+  }, [screenshare])
+
   // ── End session ───────────────────────────────────────────────────────────
   const handleEnd = async () => {
     setEnding(true)
+    screenshare.stop()
     audio.stop()
     iv.disconnect()
+    await simli.close()   // close Simli v3 WebRTC + WebSocket (async in v3)
     camStreamRef.current?.getTracks().forEach(t => t.stop())
     try {
       await fetch(`${backendUrl}/api/session/${session_id}/end`, { method: 'POST' })
@@ -119,8 +206,22 @@ export default function InterviewRoom({ session, onEnd }) {
   }, [muted, audio])
 
   // ── Derived display flags ─────────────────────────────────────────────────
-  const avatarState    = !started ? 'idle' : iv.avatarState
+  const avatarState = !started ? 'idle' : iv.avatarState
   const showTranscript = iv.transcript.length > 0
+  const simliActive = SIMLI_ENABLED && simli.isConnected
+
+  // ── Sync local audio volume with Simli connection ──────────────
+  // When Simli is connected, we use ITS synced audio stream and mute
+  // the "fast" local playback, so movements match the voice perfectly.
+  useEffect(() => {
+    if (simliActive) {
+      console.log('[Audio] Simli active — muting fast local playback for perfect sync')
+      audio.setPlaybackMuted(true)
+    } else {
+      console.log('[Audio] Simli inactive — unmuting local playback')
+      audio.setPlaybackMuted(false)
+    }
+  }, [simliActive, audio])
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -148,16 +249,43 @@ export default function InterviewRoom({ session, onEnd }) {
               <Btn active={muted} onClick={handleMute} title={muted ? 'Unmute' : 'Mute mic'}>
                 {muted ? '🔇' : '🎙️'}
               </Btn>
-              <Btn active={false} onClick={() => {}} title="Camera">
+              <Btn active={false} onClick={() => { }} title="Camera">
                 {camOn ? '📷' : '📵'}
               </Btn>
             </>
+          )}
+          {started && (
+            <button
+              style={{
+                ...S.screenShareBtn,
+                ...(screenshare.isActive ? S.screenShareBtnActive : {}),
+              }}
+              onClick={handleScreenShare}
+              title={screenshare.isActive
+                ? 'Stop screen share — AI ambient awareness off'
+                : 'Share screen — AI sees your full desktop at 1 FPS. Say "read this code" to trigger deep analysis.'}
+            >
+              {screenshare.isActive ? '🖥 Watching' : '🖥 Share Screen'}
+            </button>
           )}
           <button style={S.endBtn} onClick={handleEnd} disabled={ending}>
             {ending ? 'Ending…' : 'End Session'}
           </button>
         </div>
       </div>
+
+      {/* ── Screen share error toast ──────────────────────────────────────── */}
+      {screenshare.error && (
+        <div style={S.shareErrToast}>⚠ {screenshare.error}</div>
+      )}
+
+      {/* ── Ambient awareness badge ───────────────────────────────────────── */}
+      {screenshare.isActive && (
+        <div style={S.ambientBadge}>
+          <span style={S.ambientDot} />
+          Full desktop · 1 FPS · AI ambient awareness on
+        </div>
+      )}
 
       {/* ── Main stage ────────────────────────────────────────────────────── */}
       <div style={S.stage}>
@@ -169,15 +297,108 @@ export default function InterviewRoom({ session, onEnd }) {
           <div style={S.gemBadge}>
             <span style={S.gemDot} />
             Gemini 2.5 Flash · Native Audio
+            {simliActive && (
+              <span style={{ marginLeft: 6, color: 'rgba(134,239,172,0.8)' }}>
+                · Simli Avatar
+              </span>
+            )}
+            {!simliActive && avatarImage && (
+              <span style={{ marginLeft: 6, color: 'rgba(134,239,172,0.7)' }}>
+                · Imagen 3 Avatar
+              </span>
+            )}
           </div>
 
           {/* Avatar display area */}
           <div style={S.avatarCenter}>
-            <GeminiAvatar
-              state={avatarState}
-              analyserNode={audio.analyserNode}
-              name={config.persona_name || 'Agent'}
-            />
+
+            {/* ── Simli real-time talking avatar video ─────────────────────
+             *  ALWAYS rendered (even when not connected) so videoRef/audioRef
+             *  are attached to DOM elements when initialize() is called.
+             *  Hidden via CSS when not yet connected.
+             */}
+            <div style={{
+              ...S.simliWrapper,
+              display: 'flex',
+              // Keep video composited at all times — display:none blocks
+              // requestVideoFrameCallback, causing a 60s deadlock where
+              // LivekitTransport's 'start' event never fires.
+              // Instead, hide visually via opacity+z-index.
+              ...(SIMLI_ENABLED && !simliActive
+                ? { position: 'absolute', opacity: 0, pointerEvents: 'none', zIndex: -1 }
+                : {}),
+            }}>
+              <video
+                ref={simli.videoRef}
+                autoPlay
+                playsInline
+                style={{
+                  ...S.simliVideo,
+                  boxShadow: avatarState === 'speaking'
+                    ? '0 0 40px rgba(79,125,255,0.5), 0 0 80px rgba(79,125,255,0.2)'
+                    : avatarState === 'listening'
+                      ? '0 0 30px rgba(79,125,255,0.3)'
+                      : '0 0 20px rgba(79,125,255,0.15)',
+                  border: avatarState === 'speaking'
+                    ? '2px solid rgba(79,125,255,0.6)'
+                    : '2px solid rgba(79,125,255,0.2)',
+                  transition: 'box-shadow 0.3s ease, border-color 0.3s ease',
+                }}
+              />
+              {/* Simli audio: unmuted when active so we hear the SYNCED stream.
+               *  Local playback is muted via audio.setPlaybackMuted(true) to avoid echo. */}
+              <audio ref={simli.audioRef} autoPlay playsInline muted={!simliActive} />
+
+              {/* State indicator overlay */}
+              <div style={S.simliStateRow}>
+                <StatusDot state={avatarState} />
+                <span style={{
+                  ...S.simliStateTxt,
+                  color: avatarState === 'speaking' ? '#86efac'
+                    : avatarState === 'listening' ? '#93c5fd'
+                      : avatarState === 'thinking' ? '#c4b5fd'
+                        : '#64748b',
+                }}>
+                  {avatarState === 'speaking' ? '● Speaking'
+                    : avatarState === 'listening' ? '◎ Listening'
+                      : avatarState === 'thinking' ? '⟳ Thinking…'
+                        : '○ Idle'}
+                </span>
+              </div>
+            </div>
+
+            {/* NOTE: NO duplicate ref elements here.
+             *  The <video ref={simli.videoRef}> and <audio ref={simli.audioRef}> above
+             *  (inside simliWrapper) are ALWAYS in the DOM (just CSS-hidden when not active).
+             *  Adding a second element with the same ref would overwrite videoRef.current,
+             *  causing Simli to attach its video track to a hidden/detached element — making
+             *  the avatar invisible even after a successful WebRTC connection.
+             */}
+
+            {/* ── Simli loading indicator ──────────────────────────────── */}
+            {SIMLI_ENABLED && simli.isLoading && !simli.isConnected && (
+              <div style={S.simliLoading}>
+                <div style={S.simliLoadSpinner} className="spin" />
+                <span>Loading avatar…</span>
+              </div>
+            )}
+
+            {/* ── GeminiAvatar fallback (Imagen 3 portrait or SVG orb) ── */}
+            {!simliActive && (
+              <GeminiAvatar
+                state={avatarState}
+                analyserNode={audio.analyserNode}
+                name={config.persona_name || 'Agent'}
+                base64Image={avatarImage || null}
+              />
+            )}
+
+            {/* Simli avatar name row (only when Simli is active) */}
+            {simliActive && (
+              <div style={S.nameRow}>
+                <span style={S.nameText}>{config.persona_name || 'Agent'}</span>
+              </div>
+            )}
 
             {/* Active tool indicator */}
             {iv.activeTool && (
@@ -190,6 +411,13 @@ export default function InterviewRoom({ session, onEnd }) {
             {/* WebSocket error display */}
             {iv.error && (
               <div style={S.errPill}>⚠ {iv.error}</div>
+            )}
+
+            {/* Simli error (non-fatal — falls back to GeminiAvatar) */}
+            {SIMLI_ENABLED && simli.error && !simli.isConnected && !simli.isLoading && (
+              <div style={S.simliErrPill}>
+                Avatar unavailable — using fallback
+              </div>
             )}
           </div>
 
@@ -217,9 +445,9 @@ export default function InterviewRoom({ session, onEnd }) {
           <div style={S.statusStrip}>
             <StatusDot state={avatarState} />
             {iv.wsState === 'connecting' && <span style={S.statusTxt}>Connecting to Gemini…</span>}
-            {iv.wsState === 'ready'      && <span style={S.statusTxt}>Session ready</span>}
-            {iv.wsState === 'active'     && <span style={S.statusTxt}>Live session</span>}
-            {iv.wsState === 'ended'      && <span style={S.statusTxt}>Session ended</span>}
+            {iv.wsState === 'ready' && <span style={S.statusTxt}>Session ready</span>}
+            {iv.wsState === 'active' && <span style={S.statusTxt}>Live session</span>}
+            {iv.wsState === 'ended' && <span style={S.statusTxt}>Session ended</span>}
             {muted && <span style={S.mutedBadge}>🔇 Muted</span>}
           </div>
         </div>
@@ -330,9 +558,9 @@ function Btn({ active, onClick, title, children }) {
 
 function StatusDot({ state }) {
   const color =
-    state === 'speaking'  ? '#22c55e' :
-    state === 'listening' ? '#4f7dff' :
-    state === 'thinking'  ? '#a855f7' : '#475569'
+    state === 'speaking' ? '#22c55e' :
+      state === 'listening' ? '#4f7dff' :
+        state === 'thinking' ? '#a855f7' : '#475569'
   return (
     <div style={{ ...S.statusDot, background: color, boxShadow: `0 0 6px ${color}` }} />
   )
@@ -352,13 +580,13 @@ const S = {
     padding: '9px 18px', borderRadius: 0,
     borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0,
   },
-  topLeft:  { display: 'flex', alignItems: 'center', gap: 10 },
+  topLeft: { display: 'flex', alignItems: 'center', gap: 10 },
   topRight: { display: 'flex', alignItems: 'center', gap: 8 },
   dot: {
     width: 7, height: 7, borderRadius: '50%',
     background: 'linear-gradient(135deg,#4f7dff,#a855f7)',
   },
-  brand:      { fontSize: 14, fontWeight: 700, color: '#eef0fa' },
+  brand: { fontSize: 14, fontWeight: 700, color: '#eef0fa' },
   badge: {
     fontSize: 11, background: 'rgba(79,125,255,0.1)', padding: '2px 9px',
     borderRadius: 6, color: 'rgba(147,197,253,0.8)', border: '1px solid rgba(79,125,255,0.2)',
@@ -380,6 +608,50 @@ const S = {
     padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
     background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)',
     color: '#fca5a5', cursor: 'pointer',
+  },
+
+  // ── Screen share button ────────────────────────────────────────────────────
+  screenShareBtn: {
+    padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+    background: 'rgba(79,125,255,0.10)', border: '1px solid rgba(79,125,255,0.3)',
+    color: 'rgba(147,197,253,0.85)', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', gap: 5,
+    transition: 'all 0.2s',
+  },
+  screenShareBtnActive: {
+    background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.4)',
+    color: '#86efac',
+    animation: 'dotPulse 1.5s ease-in-out infinite',
+  },
+
+  // ── Ambient badge ─────────────────────────────────────────────────────────
+  ambientBadge: {
+    position: 'fixed',
+    top: 52, left: '50%', transform: 'translateX(-50%)',
+    display: 'flex', alignItems: 'center', gap: 6,
+    fontSize: 11, fontWeight: 600,
+    color: 'rgba(134,239,172,0.85)',
+    background: 'rgba(34,197,94,0.10)',
+    border: '1px solid rgba(34,197,94,0.3)',
+    padding: '4px 14px', borderRadius: 20,
+    pointerEvents: 'none',
+    zIndex: 9999,
+    whiteSpace: 'nowrap',
+    letterSpacing: '0.03em',
+  },
+  ambientDot: {
+    width: 6, height: 6, borderRadius: '50%',
+    background: '#22c55e', display: 'inline-block',
+    animation: 'dotPulse 1.5s ease-in-out infinite',
+    flexShrink: 0,
+  },
+
+  // ── Screen share error toast ───────────────────────────────────────────────
+  shareErrToast: {
+    position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+    background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)',
+    color: '#fca5a5', fontSize: 12, padding: '8px 16px', borderRadius: 10,
+    zIndex: 9998,
   },
 
   // ── Stage ─────────────────────────────────────────────────────────────────
@@ -408,12 +680,61 @@ const S = {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
     position: 'relative',
   },
+
+  // ── Simli video avatar ─────────────────────────────────────────────────────
+  simliWrapper: {
+    flexDirection: 'column', alignItems: 'center', gap: 12,
+    position: 'relative',
+  },
+  simliVideo: {
+    width: 280,
+    height: 360,
+    objectFit: 'cover',
+    borderRadius: 20,
+    background: '#0d1535',
+    display: 'block',
+  },
+  simliStateRow: {
+    display: 'flex', alignItems: 'center', gap: 6,
+  },
+  simliStateTxt: {
+    fontSize: 12, letterSpacing: '0.03em',
+    transition: 'color 0.3s ease',
+  },
+  simliLoading: {
+    display: 'flex', alignItems: 'center', gap: 10,
+    color: 'rgba(147,197,253,0.7)', fontSize: 13,
+    background: 'rgba(79,125,255,0.06)',
+    border: '1px solid rgba(79,125,255,0.15)',
+    padding: '10px 20px', borderRadius: 12,
+  },
+  simliLoadSpinner: {
+    width: 16, height: 16, borderRadius: '50%',
+    border: '2px solid rgba(79,125,255,0.3)',
+    borderTopColor: '#4f7dff',
+  },
+  simliErrPill: {
+    fontSize: 11, color: 'rgba(253,186,116,0.7)',
+    background: 'rgba(251,146,60,0.06)',
+    border: '1px solid rgba(251,146,60,0.2)',
+    padding: '4px 12px', borderRadius: 20,
+  },
+
+  // Name row below Simli video
+  nameRow: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+    marginTop: -4,
+  },
+  nameText: {
+    color: '#f0f0f8', fontSize: 16, fontWeight: 700, letterSpacing: '-0.2px',
+  },
+
   toolPill: {
     display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
     color: '#c4b5fd', background: 'rgba(168,85,247,0.1)',
     padding: '5px 12px', borderRadius: 20, border: '1px solid rgba(168,85,247,0.25)',
   },
-  toolSpin:  { display: 'inline-block', fontSize: 14 },
+  toolSpin: { display: 'inline-block', fontSize: 14 },
   errPill: {
     fontSize: 12, color: '#fca5a5', background: 'rgba(239,68,68,0.08)',
     padding: '5px 12px', borderRadius: 20, border: '1px solid rgba(239,68,68,0.2)',
@@ -433,89 +754,85 @@ const S = {
     border: '1px solid rgba(79,125,255,0.2)',
   },
   startBtn: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
-    padding: '20px 40px', borderRadius: 16,
-    background: 'linear-gradient(135deg,#4f7dff,#7c3aed)',
-    border: 'none', color: 'white', fontSize: 15, fontWeight: 700, cursor: 'pointer',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+    padding: '18px 40px', borderRadius: 14, cursor: 'pointer', fontSize: 15, fontWeight: 600,
+    background: 'linear-gradient(135deg, rgba(79,125,255,0.2), rgba(168,85,247,0.15))',
+    border: '1px solid rgba(79,125,255,0.4)', color: '#eef0fa',
+    transition: 'all 0.2s',
   },
-  micErr:    { fontSize: 11, color: '#fca5a5', marginTop: 4 },
-  startNote: { fontSize: 12, color: 'rgba(238,240,250,0.35)', textAlign: 'center', lineHeight: 1.6 },
+  micErr: { fontSize: 11, color: '#fca5a5', marginTop: 4 },
+  startNote: {
+    fontSize: 11, color: 'rgba(238,240,250,0.35)', textAlign: 'center', lineHeight: 1.6,
+  },
 
-  // Status strip
+  // Status strip at bottom of avatar pane
   statusStrip: {
-    position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+    position: 'absolute', bottom: 16,
     display: 'flex', alignItems: 'center', gap: 8,
-    background: 'rgba(255,255,255,0.04)', padding: '5px 14px',
-    borderRadius: 20, border: '1px solid rgba(255,255,255,0.06)',
-    zIndex: 1,
   },
-  statusDot:  { width: 7, height: 7, borderRadius: '50%', flexShrink: 0 },
-  statusTxt:  { fontSize: 11, color: 'rgba(238,240,250,0.45)' },
+  statusDot: {
+    width: 8, height: 8, borderRadius: '50%',
+    transition: 'background 0.3s ease, box-shadow 0.3s ease',
+  },
+  statusTxt: { fontSize: 12, color: 'rgba(238,240,250,0.4)' },
   mutedBadge: {
-    fontSize: 11, color: '#fca5a5', background: 'rgba(239,68,68,0.1)',
-    padding: '1px 8px', borderRadius: 20,
+    fontSize: 11, color: '#fca5a5', background: 'rgba(239,68,68,0.08)',
+    padding: '2px 8px', borderRadius: 8,
   },
 
-  // ── Right pane ─────────────────────────────────────────────────────────────
+  // ── Right pane ────────────────────────────────────────────────────────────
   rightPane: {
-    width: 300, display: 'flex', flexDirection: 'column', gap: 10, padding: 12,
-    overflowY: 'auto', background: 'rgba(255,255,255,0.008)',
+    width: 340, display: 'flex', flexDirection: 'column',
+    padding: '12px 12px 12px 0', gap: 10, overflow: 'hidden',
   },
-
-  // Camera card
-  camCard:    { borderRadius: 12, overflow: 'hidden', flexShrink: 0 },
+  camCard: {
+    borderRadius: 14, overflow: 'hidden', flexShrink: 0,
+  },
   camHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '7px 11px', borderBottom: '1px solid rgba(255,255,255,0.05)',
+    padding: '8px 12px',
+    borderBottom: '1px solid rgba(255,255,255,0.05)',
   },
-  camLabel: { fontSize: 11, fontWeight: 600, color: 'rgba(238,240,250,0.55)' },
+  camLabel: { fontSize: 12, fontWeight: 600, color: '#eef0fa' },
   camLive: {
-    display: 'flex', alignItems: 'center', gap: 5, fontSize: 10,
-    fontWeight: 700, letterSpacing: '0.08em', color: '#86efac',
+    display: 'flex', alignItems: 'center', gap: 5,
+    fontSize: 11, color: '#22c55e', fontWeight: 600,
   },
   camLiveDot: {
     width: 6, height: 6, borderRadius: '50%', background: '#22c55e',
-    display: 'inline-block', animation: 'dotPulse 1s ease-in-out infinite',
+    display: 'inline-block', animation: 'dotPulse 1.5s ease-in-out infinite',
   },
-  camBox:  { position: 'relative', aspectRatio: '4/3', background: '#050509' },
-  video:   { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
+  camBox: { position: 'relative', height: 200, background: '#0d1535' },
+  video: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
   noCamera: {
     position: 'absolute', inset: 0,
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: 6, fontSize: 28,
+    gap: 8, fontSize: 28, color: 'rgba(238,240,250,0.3)',
   },
-  noCamTxt: { fontSize: 11, color: 'rgba(238,240,250,0.3)' },
+  noCamTxt: { fontSize: 12 },
 
   // Transcript
-  transcriptCard:  { borderRadius: 12 },
+  transcriptCard: { borderRadius: 14, overflow: 'hidden' },
   transcriptHeader: {
-    padding: '8px 12px', fontSize: 11, fontWeight: 600,
-    color: 'rgba(238,240,250,0.5)', textTransform: 'uppercase', letterSpacing: '0.05em',
-    borderBottom: '1px solid rgba(255,255,255,0.05)',
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '8px 12px', fontSize: 12, fontWeight: 600, color: '#eef0fa',
+    borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0,
   },
-  transcriptCount: { fontSize: 10, color: 'rgba(238,240,250,0.3)' },
-  transcriptBody: {
-    padding: 10, overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 6,
+  transcriptCount: {
+    fontSize: 10, color: 'rgba(238,240,250,0.35)',
+    background: 'rgba(255,255,255,0.04)', padding: '2px 8px', borderRadius: 10,
   },
-  transcriptEmpty: { fontSize: 12, color: 'rgba(238,240,250,0.25)', fontStyle: 'italic' },
-  transcriptEntry: {
-    display: 'flex', flexDirection: 'column', gap: 2, padding: '6px 8px', borderRadius: 8,
-  },
-  modelEntry: { background: 'rgba(79,125,255,0.06)', borderLeft: '2px solid rgba(79,125,255,0.4)' },
-  userEntry:  { background: 'rgba(34,197,94,0.05)',  borderLeft: '2px solid rgba(34,197,94,0.3)' },
-  tRole: { fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' },
-  tText: { fontSize: 12, color: 'rgba(238,240,250,0.8)', lineHeight: 1.55 },
+  transcriptBody: { overflowY: 'auto', flex: 1, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 },
+  transcriptEmpty: { fontSize: 11, color: 'rgba(238,240,250,0.3)', textAlign: 'center', padding: '20px 0' },
+  transcriptEntry: { display: 'flex', flexDirection: 'column', gap: 2, padding: '6px 10px', borderRadius: 8 },
+  modelEntry: { background: 'rgba(79,125,255,0.06)', border: '1px solid rgba(79,125,255,0.1)' },
+  userEntry: { background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.1)' },
+  tRole: { fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' },
+  tText: { fontSize: 12, color: 'rgba(238,240,250,0.85)', lineHeight: 1.5 },
 
-  // Tips card
-  tipsCard: { borderRadius: 12, padding: 12, flexShrink: 0 },
-  tipsTitle: {
-    fontSize: 11, fontWeight: 600, color: 'rgba(238,240,250,0.4)',
-    textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8,
-  },
-  tipsList: { display: 'flex', flexDirection: 'column', gap: 5 },
-  tip: {
-    fontSize: 11, color: 'rgba(238,240,250,0.5)', lineHeight: 1.5,
-    paddingBottom: 5, borderBottom: '1px solid rgba(255,255,255,0.04)',
-  },
+  // Tips
+  tipsCard: { borderRadius: 14, padding: '10px 12px', flexShrink: 0 },
+  tipsTitle: { fontSize: 11, fontWeight: 700, color: 'rgba(238,240,250,0.5)', marginBottom: 6, letterSpacing: '0.04em' },
+  tipsList: { display: 'flex', flexDirection: 'column', gap: 4 },
+  tip: { fontSize: 11, color: 'rgba(238,240,250,0.4)', lineHeight: 1.4 },
 }

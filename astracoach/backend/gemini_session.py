@@ -1,5 +1,5 @@
 """
-Gemini Live Session Manager — Tri-Agent Architecture
+Gemini Live Session Manager — Dual-Agent Architecture
 ======================================================
 Manages a single Gemini Live session using Google ADK.
 
@@ -8,19 +8,19 @@ Architecture:
   │  VoiceAgent  (gemini-2.5-flash-native-audio, bidi streaming)   │
   │  ├── Tools: web_search, evaluate_response, give_live_coaching,  │
   │  │          remember_context, get_structured_plan               │
-  │  └── sub_agents: [ReasoningAgent]                               │
-  │                                                                 │
-  │  ReasoningAgent  (gemini-2.5-flash text, code execution)        │
-  │  └── BuiltInCodeExecutor (PIL, numpy, data analysis in Python)  │
+  │  └── Tool:  analyze_screen_content  (closure → regular genAI)  │
   └─────────────────────────────────────────────────────────────────┘
 
-Routing:
-  VoiceAgent handles all conversational turns natively.
-  When user shows a document/resume or asks for deep analysis,
-  VoiceAgent calls transfer_to_agent("reasoning_agent") automatically.
-  ReasoningAgent uses Python code execution (PIL/Pillow etc.) to
-  extract text, analyse structure, and return detailed results back
-  to VoiceAgent, which summarises verbally for the user.
+WHY NO sub_agents:
+  ADK's run_live() propagates bidiGenerateContent to ALL sub-agents in
+  the tree.  Only dedicated Live API models (gemini-2.0-flash-live-001,
+  native-audio variants) support bidi on v1alpha.  Using sub_agents with
+  a text model always causes a 1008 crash at session start.
+
+  Instead, analyze_screen_content is a plain async FunctionTool that
+  makes a regular client.models.generate_content() call internally.
+  It can therefore use any model, has zero bidi requirement, and keeps
+  the VoiceAgent's live session intact.
 
 Audio format contract:
   Browser → Backend:  PCM16, 16 kHz, mono  (binary WS frames)
@@ -44,10 +44,10 @@ from agent_tools import ALL_TOOLS
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
 
-MODEL_VOICE     = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
-MODEL_REASONING = "gemini-2.5-flash-preview-04-17"   # text model for code execution
-APP_NAME        = "astra_coach"
-USER_ID         = "default_user"
+MODEL_VOICE    = os.getenv("GEMINI_MODEL",    "gemini-2.5-flash-native-audio-preview-12-2025")
+MODEL_ANALYSIS = os.getenv("ANALYSIS_MODEL",  "gemini-2.0-flash")   # used by analyze_screen_content tool (regular generate_content, NOT bidi)
+APP_NAME       = "astra_coach"
+USER_ID        = "default_user"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # System prompts
@@ -65,43 +65,53 @@ Conversation style:
 Tools available: web_search, evaluate_response, give_live_coaching,
 remember_context, get_structured_plan. Use them when genuinely helpful.
 
-─── ReasoningAgent delegation (IMPORTANT) ───────────────────────
-You have a sub-agent called "reasoning_agent" that can:
-- Execute Python code with PIL/Pillow to analyse document/resume images
-- Extract fine text, detect layout, count sections, score formatting
-- Run any data analysis that requires code execution
+─── Screen Share Ambient Awareness (READ CAREFULLY) ─────────────
+You are receiving a 1-frame-per-second JPEG image feed of the user's
+ENTIRE computer desktop, squished into 768×768 pixels.
 
-WHEN TO DELEGATE:
-- User shows a document, resume, CV, or certificate via camera
-- User asks to "read", "analyse", or "review" something they're holding up
-- Any task that needs precise text extraction or image analysis
-- User explicitly asks you to "look at this" or "what does this say"
+WHAT THIS MEANS FOR YOU:
+- You have ambient awareness of which applications the user has open
+  (e.g., VS Code, browser, terminal, document editor, Figma, etc.)
+- You can detect the GENERAL LAYOUT of their screen — multiple windows,
+  which app is in focus, whether they are coding, browsing, or writing
+- You CANNOT reliably read fine text (code lines, error messages,
+  terminal output) because the squish-to-768 makes it blurry.
+  Do NOT guess at specific text content — you will make errors.
 
-HOW TO DELEGATE:
-Say briefly: "Let me take a closer look at that for you."
-Then use transfer_to_agent with agent_name="reasoning_agent".
-After reasoning_agent returns, summarise its findings conversationally.
-"""
+RULE 1 — SILENCE BY DEFAULT:
+Process every frame silently in the background. Do NOT narrate the
+screen constantly. Do not say "I can see you're in VS Code" unless
+directly asked.
 
-REASONING_AGENT_PROMPT = """
-You are ReasoningAgent — a document and image analysis specialist.
-You are called by the VoiceAgent when fine image/document analysis is needed.
+RULE 2 — RESPOND WHEN DIRECTLY ASKED:
+If the user asks "What am I doing?", "What do you see?", or
+"What app am I in?" — give a brief, accurate description of the
+general desktop layout (which apps appear open, what seems active).
+Keep it to 1–2 sentences. Example:
+  "It looks like you have VS Code open with what seems like a Python
+   project, and a browser tab in the background."
 
-Your capabilities:
-- Python code execution with PIL/Pillow, numpy, io
-- Image analysis: text detection, layout analysis, OCR-like extraction
-- Document scoring: content quality, formatting, completeness
+RULE 3 — USE analyze_screen_content FOR FINE TEXT:
+You MUST call the analyze_screen_content tool when:
+  • The user says "read this code" / "can you see this?" / "debug this"
+  • The user asks about a specific line, error, or piece of text
+  • The user says "what does this say?" about something on screen
+  • The user asks you to review, analyse, or explain visible content
 
-When given an image or document to analyse:
-1. Write Python code using PIL to open and inspect the image
-2. Analyse dimensions, colour distribution, text regions
-3. Extract any readable text content using available libraries
-4. Provide a structured analysis: sections found, key content, quality score
-5. Return a concise summary the VoiceAgent can relay conversationally
+When calling the tool, say briefly: "Let me zoom in and read that."
+Pass the user's exact question as the argument. After it returns,
+summarise the findings conversationally in under 80 words.
 
-Always return results as a clear text summary (not code blocks) since
-VoiceAgent will read it aloud. Be thorough but keep the final summary
-under 200 words.
+RULE 4 — CAMERA FRAMES vs SCREEN FRAMES:
+You also receive occasional camera frames (user's face/environment).
+These are separate from screen share frames. Camera frames help you
+read documents the user holds up; screen frames are the desktop feed.
+
+RULE 5 — DO NOT FABRICATE TEXT:
+Never guess or fabricate what text says on screen. If you are not
+sure, say "I can see you're working on something but I can't make out
+the fine details — want me to zoom in and read it?"
+─────────────────────────────────────────────────────────────────
 """
 
 
@@ -120,45 +130,6 @@ def build_system_prompt(session) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Build the Reasoning Sub-Agent
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _build_reasoning_agent() -> LlmAgent:
-    """
-    Creates the ReasoningAgent with BuiltInCodeExecutor.
-
-    NOTE: BuiltInCodeExecutor cannot be mixed with custom FunctionTools
-    in the same agent (ADK constraint). ReasoningAgent gets code execution;
-    VoiceAgent gets all custom FunctionTools. They complement each other.
-    """
-    try:
-        from google.adk.code_executors import BuiltInCodeExecutor
-        reasoning_agent = LlmAgent(
-            name="reasoning_agent",
-            model=MODEL_REASONING,
-            instruction=REASONING_AGENT_PROMPT,
-            code_executor=BuiltInCodeExecutor(),
-        )
-        print("[GeminiLive] ✅ ReasoningAgent created with BuiltInCodeExecutor")
-        return reasoning_agent
-    except ImportError:
-        # ADK version doesn't have BuiltInCodeExecutor — create without it
-        print("[GeminiLive] ⚠  BuiltInCodeExecutor not available — reasoning agent runs without code execution")
-        return LlmAgent(
-            name="reasoning_agent",
-            model=MODEL_REASONING,
-            instruction=REASONING_AGENT_PROMPT,
-        )
-    except Exception as e:
-        print(f"[GeminiLive] ⚠  Could not create ReasoningAgent: {e} — disabling sub-agent")
-        return None
-
-
-# Build once at module load (shared across all sessions)
-_reasoning_agent = _build_reasoning_agent()
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # GeminiLiveBridge
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -169,6 +140,10 @@ class GeminiLiveBridge:
     Architecture mirrors the ADK bidi-demo sample:
       - upstream_task:   reads audio blobs from a Queue → LiveRequestQueue
       - downstream_task: iterates run_live() events → forwards audio/control to browser
+
+    Screen analysis is handled by an analyze_screen_content FunctionTool (a
+    closure over this instance) that calls generate_content() directly — no bidi
+    required, so any model works.
     """
 
     def __init__(self, api_key: str, session, ws_send_bytes, ws_send_text):
@@ -179,11 +154,93 @@ class GeminiLiveBridge:
         self._closed     = False
         self._interrupted = False          # gate: when True, block audio forwarding
 
+        # Latest screen share frame — updated by _upstream_task, read by analyze tool
+        self._latest_screen_frame: bytes = b""
+        self._latest_screen_mime:  str   = "image/jpeg"
+
         # Shared queue: main.py pushes items here, upstream_task reads them
         self._ws_incoming_queue: asyncio.Queue = asyncio.Queue()
 
         # ADK live request queue for bidirectional streaming
         self._q = LiveRequestQueue()
+
+    # ── Screen analysis tool (closure pattern) ───────────────────────────────
+
+    def _make_analyze_tool(self):
+        """
+        Returns an async function tool that analyses the current screen frame.
+
+        Implemented as a closure so the tool can access self._latest_screen_frame
+        without global state.  The function calls generate_content() (not bidi),
+        so it has NO model restrictions — any standard Gemini model works.
+        """
+        bridge = self   # capture instance
+
+        async def analyze_screen_content(question: str) -> str:
+            """
+            Analyse the current screen share frame to read fine text, code, error
+            messages, or other content that is too blurry in the ambient 768×768 feed.
+
+            Call this whenever the user asks you to read, debug, or explain something
+            specific that is visible on their screen.
+
+            Args:
+                question: Exactly what the user wants to know about the screen content.
+
+            Returns:
+                Plain-text analysis of the visible screen content answering the question.
+            """
+            if not bridge._latest_screen_frame:
+                return (
+                    "No screen share frame is available yet. "
+                    "Ask the user to start screen sharing first."
+                )
+
+            try:
+                import google.genai as genai
+
+                client = genai.Client(api_key=bridge.api_key)
+
+                img_part = types.Part.from_bytes(
+                    data=bridge._latest_screen_frame,
+                    mime_type=bridge._latest_screen_mime,
+                )
+
+                prompt = (
+                    "You are analysing a screenshot of a user's desktop. "
+                    "The image is the user's full screen compressed to 768×768 pixels.\n\n"
+                    f"User's question: {question}\n\n"
+                    "Instructions:\n"
+                    "- Examine the image carefully and answer the question precisely.\n"
+                    "- If you can see code, read it accurately and describe what it does.\n"
+                    "- If there are error messages, quote them exactly.\n"
+                    "- If text is blurry or partially visible, describe what you can make out.\n"
+                    "- If code has bugs, name the specific issue (line, variable, logic error).\n"
+                    "- Be factual — never invent content you cannot see.\n"
+                    "- Keep the response under 150 words (it will be read aloud).\n"
+                    "- Use plain text only — no markdown, no bullet points."
+                )
+
+                # Run blocking SDK call in a thread to avoid blocking the event loop
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=MODEL_ANALYSIS,
+                    contents=[
+                        types.Content(parts=[
+                            types.Part.from_text(text=prompt),
+                            img_part,
+                        ])
+                    ],
+                )
+                return response.text or "Screen analysis returned an empty response."
+
+            except Exception as e:
+                print(f"[analyze_screen_content] Error: {e}")
+                return f"Screen analysis failed: {e}"
+
+        return analyze_screen_content
+
+    # ── Main entry point ──────────────────────────────────────────────────────
 
     async def run(self):
         """
@@ -195,18 +252,18 @@ class GeminiLiveBridge:
 
         print(f"[GeminiLive] Starting session: model={MODEL_VOICE}")
 
-        # 1. Build VoiceAgent with all custom tools + ReasoningAgent as sub_agent
-        agent_kwargs = dict(
+        # 1. Build VoiceAgent — all custom tools + analyze_screen_content closure tool
+        #    NOTE: No sub_agents here. Sub-agents require bidi-capable models for ALL agents
+        #    in the tree, which is a severe limitation. The analyze_screen_content FunctionTool
+        #    achieves the same screen-reading capability via regular generate_content() instead.
+        analyze_tool = self._make_analyze_tool()
+        voice_agent = LlmAgent(
             name=APP_NAME,
             model=MODEL_VOICE,
             instruction=system_prompt,
-            tools=ALL_TOOLS,
+            tools=[*ALL_TOOLS, analyze_tool],
         )
-        if _reasoning_agent is not None:
-            agent_kwargs["sub_agents"] = [_reasoning_agent]
-            print("[GeminiLive] Tri-agent routing enabled: VoiceAgent → ReasoningAgent")
-
-        voice_agent = LlmAgent(**agent_kwargs)
+        print(f"[GeminiLive] VoiceAgent ready. Screen analysis tool: {MODEL_ANALYSIS}")
 
         # 2. ADK session service
         session_service = InMemorySessionService()
@@ -223,7 +280,10 @@ class GeminiLiveBridge:
         )
 
         # 4. RunConfig — Native Audio BIDI
-        run_config = RunConfig(
+        # Try to enable proactive_audio + enable_affective_dialog (ADK ≥ 0.6.0).
+        # Gracefully fall back to base RunConfig on older ADK versions that don't
+        # have these fields yet (avoids a TypeError crashing the session).
+        _base_run_config_kwargs = dict(
             streaming_mode=StreamingMode.BIDI,
             response_modalities=["AUDIO"],
             # NOTE: speech_config NOT supported for native audio models (causes 1008)
@@ -234,6 +294,18 @@ class GeminiLiveBridge:
             ),
             save_live_blob=True,  # Required for ADK to flush and yield interruption events
         )
+        try:
+            run_config = RunConfig(
+                **_base_run_config_kwargs,
+                proactivity=types.ProactivityConfig(proactive_audio=True),
+                enable_affective_dialog=True,
+            )
+            print("[GeminiLive] RunConfig: proactive_audio=True, enable_affective_dialog=True ✅")
+        except (TypeError, AttributeError) as _cfg_err:
+            # ADK version doesn't support these fields yet — run without them
+            print(f"[GeminiLive] RunConfig: proactivity/affective_dialog not available "
+                  f"({_cfg_err.__class__.__name__}: {_cfg_err}) — using base config")
+            run_config = RunConfig(**_base_run_config_kwargs)
 
         # 5. Notify frontend that session is live
         await self._notify({"type": "ready"})
@@ -296,13 +368,30 @@ class GeminiLiveBridge:
                     self._q.send_activity_end()
 
                 elif item_type == "frame":
+                    # Camera frame (320×240 JPEG from the user's webcam)
                     jpeg = item.get("data", b"")
                     if jpeg:
                         try:
                             blob = types.Blob(data=jpeg, mime_type="image/jpeg")
                             self._q.send_realtime(blob)
                         except Exception as frame_err:
-                            print(f"[upstream_task] frame send error: {frame_err}")
+                            print(f"[upstream_task] camera frame send error: {frame_err}")
+
+                elif item_type == "image":
+                    # Full-desktop screen share frame (768×768 squished JPEG).
+                    # 1. Store it so analyze_screen_content tool can use it.
+                    # 2. Forward to Gemini Live for ambient awareness.
+                    jpeg      = item.get("data", b"")
+                    mime_type = item.get("mime_type", "image/jpeg")
+                    if jpeg:
+                        # Store latest frame for the analyze_screen_content tool
+                        self._latest_screen_frame = jpeg
+                        self._latest_screen_mime  = mime_type
+                        try:
+                            blob = types.Blob(data=jpeg, mime_type=mime_type)
+                            self._q.send_realtime(blob)
+                        except Exception as img_err:
+                            print(f"[upstream_task] screen image send error: {img_err}")
 
         except Exception as e:
             print(f"[upstream_task] Error: {e}")
@@ -380,19 +469,17 @@ class GeminiLiveBridge:
                             "text": text,
                         })
 
-                # ── 6. Handle tool calls + agent transfers ────────────────
+                # ── 6. Handle tool calls ──────────────────────────────────
                 if hasattr(event, "get_function_calls"):
                     calls = event.get_function_calls()
                     if calls:
                         await self._notify({"type": "status", "state": "thinking"})
                         for fc in calls:
-                            # Detect ReasoningAgent delegation
                             tool_name = fc.name
-                            if tool_name == "transfer_to_agent":
-                                target = (fc.args or {}).get("agent_name", "reasoning_agent")
+                            if tool_name == "analyze_screen_content":
                                 await self._notify({
                                     "type": "tool_call",
-                                    "name": f"→ {target}",
+                                    "name": "🔍 analyzing screen…",
                                     "status": "running",
                                 })
                             else:
