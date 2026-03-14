@@ -89,7 +89,7 @@ active_bridges: dict[str, GeminiLiveBridge] = {}
 class CreateSessionRequest(BaseModel):
     persona_name:  str  = "AI Agent"           # display name shown in UI
     system_prompt: str  = "You are a helpful AI assistant."  # THE full persona prompt
-    voice:         str  = "Aoede"              # Gemini Live voice
+    voice:         str  = "Puck"               # Gemini Live voice (Male default)
     user_name:     str  = ""                   # optional — personalises agent
 
 
@@ -103,14 +103,14 @@ class GenerateAvatarRequest(BaseModel):
 
 # Available Gemini Live voices (for UI dropdown)
 AVAILABLE_VOICES = [
-    {"id": "Aoede",  "label": "Aoede  — Warm, natural"},
-    {"id": "Puck",   "label": "Puck   — Friendly, conversational"},
-    {"id": "Charon", "label": "Charon — Deep, authoritative"},
-    {"id": "Kore",   "label": "Kore   — Neutral, professional"},
-    {"id": "Fenrir", "label": "Fenrir — Warm, approachable"},
-    {"id": "Leda",   "label": "Leda   — Clear, precise"},
-    {"id": "Orus",   "label": "Orus   — Calm, measured"},
-    {"id": "Zephyr", "label": "Zephyr — Bright, energetic"},
+    {"id": "Puck",   "label": "Puck   — Male, Friendly & Conversational"},
+    {"id": "Charon", "label": "Charon — Male, Deep & Authoritative"},
+    {"id": "Fenrir", "label": "Fenrir — Male, Warm & Approachable"},
+    {"id": "Orus",   "label": "Orus   — Male, Calm & Measured"},
+    {"id": "Aoede",  "label": "Aoede  — Female, Warm & Natural"},
+    {"id": "Kore",   "label": "Kore   — Female, Neutral & Professional"},
+    {"id": "Leda",   "label": "Leda   — Female, Clear & Precise"},
+    {"id": "Zephyr", "label": "Zephyr — Female, Bright & Energetic"},
 ]
 
 
@@ -152,11 +152,11 @@ async def generate_avatar(req: GenerateAvatarRequest):
     #   - Front-facing is critical — side profiles break the face-slice technique
     #   - Plain background prevents visual noise behind the avatar rings
     prompt = (
-        f"A photorealistic, front-facing portrait of {description}. "
-        "Professional studio lighting, clean neutral dark grey background. "
+        f"A photorealistic, front-facing medium-shot portrait of {description}. "
+        "Professional studio lighting, LIGHT studio grey bokeh background (softly defocused). "
         "Subject looking directly at the camera with a neutral resting expression "
         "and lips closed in a relaxed, natural position. "
-        "Sharp focus on the face, cinematic quality headshot."
+        "Showing head, shoulders and chest, cinematic quality upper-body portrait."
     )
 
     from google import genai as _genai
@@ -305,12 +305,22 @@ async def end_session(session_id: str):
     """Gracefully end an interview session."""
     bridge = active_bridges.pop(session_id, None)
     if bridge:
+        # bridge.close() schedules summarize_and_persist as a fire-and-forget
+        # background task. We must NOT delete the session from the store before
+        # this task runs, or it will fail to find the transcript.
+        # Since we now pass session=self.session directly inside close(), the
+        # task holds a direct reference to the AgentSession object and is
+        # safe even if we call store.delete() immediately after. But we still
+        # mark inactive first to be explicit about state.
         await bridge.close()
 
     s = store.get(session_id)
     if s:
         s.is_active = False
-    store.delete(session_id)
+    # NOTE: Do NOT call store.delete() here — the summarization background task
+    # may still be running and needs the session's transcript. The session will
+    # be cleaned up naturally (in-memory: on restart; Firestore: marked inactive).
+    # store.delete(session_id)  ← REMOVED to prevent race condition
 
     return {"success": True}
 
@@ -358,6 +368,8 @@ async def interview_websocket(ws: WebSocket, session_id: str):
         session=session,
         ws_send_bytes=ws.send_bytes,
         ws_send_text=ws.send_text,
+        store=store,                      # enables Contextual Recall + post-session summarization
+        user_id=session.user_name or "",  # normalised to stable Firestore key inside bridge
     )
 
     # Wire up transcript persistence
@@ -450,7 +462,16 @@ async def interview_websocket(ws: WebSocket, session_id: str):
     except Exception as e:
         print(f"[WS] Error for {session_id}: {e}")
     finally:
-        # Clean up
+        # ── Trigger post-session summarization before tearing down ───────────
+        # This fires when the user closes the browser tab OR the WS disconnects.
+        # bridge.close() schedules summarize_and_persist as a fire-and-forget task.
+        # It is idempotent — the _closed flag prevents double-scheduling if
+        # end_session() already called it.
+        if not bridge._closed:
+            await bridge.close()
+            print(f"[WS] bridge.close() triggered from WebSocket disconnect for {session_id}")
+
+        # Cancel the Gemini Live background task
         gemini_task.cancel()
         try:
             await gemini_task

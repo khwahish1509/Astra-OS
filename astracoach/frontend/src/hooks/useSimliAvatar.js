@@ -31,7 +31,7 @@
  *  later removed from the DOM, the video track plays there silently.
  */
 
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useRef, useState, useCallback, useEffect, useMemo } from 'react'
 import { SimliClient } from 'simli-client'
 
 // ── Simli session-token fetch ─────────────────────────────────────────────────
@@ -61,6 +61,8 @@ async function fetchSimliSessionToken(apiKey, faceId, maxSessionLength = 3600, m
       maxIdleTime,
       // Optimized for low-latency talking avatar
       model: "fasttalk",
+      is_trinity_avatar: true,
+      remove_background: true,
     }),
   })
 
@@ -107,7 +109,6 @@ export function useSimliAvatar({ apiKey, faceId, onConnected, onDisconnected }) 
   const clientRef = useRef(null)   // active SimliClient instance
   const hasAttemptedRef = useRef(false)  // one-shot guard (SDK not reusable)
   const chunkCountRef = useRef(0)      // diagnostic counter for audio chunks sent
-  const immediateFailedRef = useRef(false)  // true after sendAudioDataImmediate first fails
   const isConnectedRef = useRef(false)  // mirror of isConnected state (for sendPcm24kHz)
 
   // ── Audio Buffering ───────────────────────────────────────────────────────
@@ -116,7 +117,7 @@ export function useSimliAvatar({ apiKey, faceId, onConnected, onDisconnected }) 
   const pcmBufferRef = useRef(new Uint8Array(0))
   const flushTimeoutRef = useRef(null)
   const lastChunkTimeRef = useRef(0)
-  const BUFFER_THRESHOLD = 6000 // bytes of 16kHz PCM16 (Simli preferred block size)
+  const BUFFER_THRESHOLD = 4000 // approx 125ms - allows for stable server-side jitter buffering
 
   // ── Waveform Continuity State ──────────────────────────────────────────────
   // maintains the last sample and fractional phase from the previous chunk
@@ -169,6 +170,9 @@ export function useSimliAvatar({ apiKey, faceId, onConnected, onDisconnected }) 
     state.lastSample = input[input.length - 1]
     state.phase = (outLength * step + state.phase) - input.length
 
+    // EXPLICIT SYNC: Ensure we are sending 16kHz PCM16 Mono exactly.
+    // If the input was suspiciously large (stereo or 48kHz), this will
+    // still produce a valid 1x speed mono stream.
     return new Uint8Array(output.buffer)
   }, [])
 
@@ -390,11 +394,9 @@ export function useSimliAvatar({ apiKey, faceId, onConnected, onDisconnected }) 
       pcmBufferRef.current = newBuf
 
       const doSend = (buf) => {
-        if (immediateFailedRef.current) {
-          client.sendAudioData(buf)
-        } else {
-          client.sendAudioDataImmediate(buf)
-        }
+        // Standard sendAudioData allows Simli server to smooth jitter.
+        // Immediate mode clears the buffer every time, which can cause choppiness.
+        client.sendAudioData(buf)
       }
 
       // If we hit threshold, send immediately
@@ -414,21 +416,7 @@ export function useSimliAvatar({ apiKey, faceId, onConnected, onDisconnected }) 
       }
     } catch (e) {
       // Log the error — this tells us WHY audio isn't reaching Simli
-      const errStr = String(e)
-      if (!immediateFailedRef.current) {
-        console.warn('[Simli] ⚠️  sendAudioDataImmediate FAILED:', errStr,
-          '— falling back to sendAudioData (buffered mode, ~1s lag)')
-        immediateFailedRef.current = true
-        // Try to send whatever we have left in buffered mode
-        try {
-          if (pcmBufferRef.current.length > 0) {
-            client.sendAudioData(pcmBufferRef.current)
-            pcmBufferRef.current = new Uint8Array(0)
-          }
-        } catch (e2) {
-          console.warn('[Simli] ⚠️  sendAudioData ALSO FAILED:', String(e2))
-        }
-      }
+      console.warn('[Simli] ⚠️  sendAudioData FAILED:', String(e))
     }
   }, [])
 
@@ -443,21 +431,25 @@ export function useSimliAvatar({ apiKey, faceId, onConnected, onDisconnected }) 
   // Cleanup on unmount
   useEffect(() => () => { cleanup() }, [cleanup])
 
-  return {
+  // ── clearBuffer ───────────────────────────────────────────────────────────
+  const clearBuffer = useCallback(() => {
+    if (clientRef.current) {
+      console.log('[Simli] Clearing audio buffer (interruption)')
+      pcmBufferRef.current = new Uint8Array(0) // Clear JS-side buffer too
+      clientRef.current.ClearBuffer()
+    }
+  }, [])
+
+  // ── Stable Return Object ──────────────────────────────────────────────────
+  return useMemo(() => ({
     videoRef,
     audioRef,
     isConnected,
     isLoading,
     error,
     initialize,
-    sendPcm24kHz,
     close,
-    clearBuffer: () => {
-      if (clientRef.current) {
-        console.log('[Simli] Clearing audio buffer (interruption)')
-        pcmBufferRef.current = new Uint8Array(0) // Clear JS-side buffer too
-        clientRef.current.ClearBuffer()
-      }
-    },
-  }
+    sendPcm24kHz,
+    clearBuffer,
+  }), [videoRef, audioRef, isConnected, isLoading, error, initialize, close, sendPcm24kHz, clearBuffer])
 }

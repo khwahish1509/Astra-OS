@@ -14,7 +14,7 @@
  *    - Transcript accumulation
  */
 
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useRef, useState, useCallback, useEffect, useMemo } from 'react'
 
 const FRAME_SEND_INTERVAL_MS = 1000   // camera frame every 1s
 const MAX_TRANSCRIPT_ENTRIES = 60
@@ -233,7 +233,8 @@ export function useInterviewSession({
     }
   }, [])
 
-  return {
+  // ── Stable Return Object ───────────────────────────────────
+  return useMemo(() => ({
     connect,
     disconnect,
     sendPcm,
@@ -248,6 +249,21 @@ export function useInterviewSession({
     activeTool,
     error,
     onSpeechStart: handleSpeechStart,
-    onSpeechEnd: handleSpeechEnd
-  }
+    onSpeechEnd: handleSpeechEnd,
+  }), [
+    connect,
+    disconnect,
+    sendPcm,
+    sendScreenFrame,
+    pauseCameraFrames,
+    resumeCameraFrames,
+    setVideoRef,
+    wsState,
+    avatarState,
+    transcript,
+    activeTool,
+    error,
+    handleSpeechStart,
+    handleSpeechEnd,
+  ])
 }

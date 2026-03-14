@@ -293,6 +293,17 @@ export default function InterviewRoom({ session, onEnd }) {
         {/* ── LEFT: Avatar pane ─────────────────────────────────────────── */}
         <div style={S.avatarPane}>
 
+          {/* ── Cinematic Ambient Backdrop Layer ── */}
+          {avatarImage && (
+            <div
+              style={{
+                ...S.backdropLayer,
+                backgroundImage: `url(${avatarImage.startsWith('data:') ? avatarImage : `data:image/png;base64,${avatarImage}`})`
+              }}
+            />
+          )}
+
+          {/* Simli Video Layer */}
           {/* Gemini model badge */}
           <div style={S.gemBadge}>
             <span style={S.gemDot} />
@@ -390,6 +401,7 @@ export default function InterviewRoom({ session, onEnd }) {
                 analyserNode={audio.analyserNode}
                 name={config.persona_name || 'Agent'}
                 base64Image={avatarImage || null}
+                fullScreen={true}
               />
             )}
 
@@ -570,15 +582,23 @@ function StatusDot({ state }) {
 const S = {
   // Layout
   root: {
+    width: '100dvw', height: '100dvh',
     display: 'flex', flexDirection: 'column',
-    height: '100vh', background: '#07070f', overflow: 'hidden',
+    background: '#f3f4f6', // Light grey base
+    color: '#111827', // Dark charcoal text
+    fontFamily: '"Inter", "Outfit", sans-serif',
+    overflow: 'hidden',
   },
 
   // ── Top bar ───────────────────────────────────────────────────────────────
   topBar: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '9px 18px', borderRadius: 0,
-    borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0,
+    height: '72px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '0 32px',
+    background: 'rgba(255, 255, 255, 0.8)',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+    borderBottom: '1px solid #e5e7eb',
+    zIndex: 1000,
+    backdropFilter: 'blur(12px)',
   },
   topLeft: { display: 'flex', alignItems: 'center', gap: 10 },
   topRight: { display: 'flex', alignItems: 'center', gap: 8 },
@@ -586,41 +606,51 @@ const S = {
     width: 7, height: 7, borderRadius: '50%',
     background: 'linear-gradient(135deg,#4f7dff,#a855f7)',
   },
-  brand: { fontSize: 14, fontWeight: 700, color: '#eef0fa' },
+  brand: {
+    fontSize: '18px', fontWeight: 700,
+    letterSpacing: '-0.02em',
+    color: '#111827',
+  },
   badge: {
-    fontSize: 11, background: 'rgba(79,125,255,0.1)', padding: '2px 9px',
-    borderRadius: 6, color: 'rgba(147,197,253,0.8)', border: '1px solid rgba(79,125,255,0.2)',
+    background: '#eff6ff',
+    color: '#2563eb',
+    padding: '4px 10px', borderRadius: '6px',
+    fontSize: '12px', fontWeight: 600,
   },
   voiceBadge: {
-    fontSize: 11, background: 'rgba(168,85,247,0.08)', padding: '2px 9px',
-    borderRadius: 6, color: 'rgba(196,181,253,0.7)', border: '1px solid rgba(168,85,247,0.18)',
+    background: '#f0fdf4',
+    color: '#16a34a',
+    padding: '4px 10px', borderRadius: '6px',
+    fontSize: '12px', fontWeight: 600,
   },
   timer: {
-    fontSize: 20, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
-    color: '#eef0fa', letterSpacing: '0.04em',
+    fontSize: '24px', fontWeight: 600, fontFamily: 'monospace',
+    color: '#111827',
   },
   iconBtn: {
-    width: 34, height: 34, borderRadius: 8, border: '1px solid rgba(255,255,255,0.07)',
-    color: '#eef0fa', cursor: 'pointer', fontSize: 15,
+    width: 34, height: 34, borderRadius: 8, border: '1px solid #e5e7eb',
+    color: '#4b5563', cursor: 'pointer', fontSize: 15,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: '#ffffff',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
   },
   endBtn: {
     padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-    background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)',
-    color: '#fca5a5', cursor: 'pointer',
+    background: '#fee2e2', border: '1px solid #fca5a5',
+    color: '#dc2626', cursor: 'pointer',
   },
 
   // ── Screen share button ────────────────────────────────────────────────────
   screenShareBtn: {
     padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-    background: 'rgba(79,125,255,0.10)', border: '1px solid rgba(79,125,255,0.3)',
-    color: 'rgba(147,197,253,0.85)', cursor: 'pointer',
+    background: '#e0f2fe', border: '1px solid #93c5fd',
+    color: '#2563eb', cursor: 'pointer',
     display: 'flex', alignItems: 'center', gap: 5,
     transition: 'all 0.2s',
   },
   screenShareBtnActive: {
-    background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.4)',
-    color: '#86efac',
+    background: '#dcfce7', border: '1px solid #86efac',
+    color: '#16a34a',
     animation: 'dotPulse 1.5s ease-in-out infinite',
   },
 
@@ -630,9 +660,9 @@ const S = {
     top: 52, left: '50%', transform: 'translateX(-50%)',
     display: 'flex', alignItems: 'center', gap: 6,
     fontSize: 11, fontWeight: 600,
-    color: 'rgba(134,239,172,0.85)',
-    background: 'rgba(34,197,94,0.10)',
-    border: '1px solid rgba(34,197,94,0.3)',
+    color: '#16a34a',
+    background: '#dcfce7',
+    border: '1px solid #86efac',
     padding: '4px 14px', borderRadius: 20,
     pointerEvents: 'none',
     zIndex: 9999,
@@ -649,49 +679,67 @@ const S = {
   // ── Screen share error toast ───────────────────────────────────────────────
   shareErrToast: {
     position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-    background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)',
-    color: '#fca5a5', fontSize: 12, padding: '8px 16px', borderRadius: 10,
+    background: '#fee2e2', border: '1px solid #fca5a5',
+    color: '#dc2626', fontSize: 12, padding: '8px 16px', borderRadius: 10,
     zIndex: 9998,
   },
 
   // ── Stage ─────────────────────────────────────────────────────────────────
-  stage: { display: 'flex', flex: 1, overflow: 'hidden' },
+  stage: {
+    flex: 1, position: 'relative',
+    display: 'flex', gap: '32px', padding: '32px',
+    background: '#f9fafb', // Clean white-grey
+    overflow: 'hidden',
+  },
 
   // ── Avatar pane (left) ────────────────────────────────────────────────────
   avatarPane: {
-    flex: 1, display: 'flex', flexDirection: 'column',
+    position: 'relative', flex: 1,
+    display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center',
-    position: 'relative',
-    background: '#07070f',
-    borderRight: '1px solid rgba(255,255,255,0.05)',
+    background: '#ffffff', // White background for avatar
+    borderRadius: '16px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+    overflow: 'hidden',
+  },
+  backdropLayer: {
+    position: 'absolute', inset: 0,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+    filter: 'blur(80px) brightness(0.9) saturate(1.1)', // Adjusted for light mode
+    opacity: 0.7,
+    zIndex: -1,
+    transform: 'scale(1.2)',
   },
   gemBadge: {
     position: 'absolute', top: 14, left: 14,
     display: 'flex', alignItems: 'center', gap: 6,
-    fontSize: 11, color: 'rgba(238,240,250,0.5)',
-    background: 'rgba(255,255,255,0.04)', padding: '4px 10px',
-    borderRadius: 20, border: '1px solid rgba(255,255,255,0.07)',
+    fontSize: 11, color: '#4b5563', // Darker text
+    background: '#f3f4f6', // Light grey background
+    padding: '4px 10px',
+    borderRadius: 20, border: '1px solid #e5e7eb', // Lighter border
   },
   gemDot: {
     width: 6, height: 6, borderRadius: '50%', background: '#4f7dff',
     display: 'inline-block', animation: 'dotPulse 2s ease-in-out infinite',
   },
   avatarCenter: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
+    width: '100%', height: '100%',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
     position: 'relative',
   },
 
   // ── Simli video avatar ─────────────────────────────────────────────────────
   simliWrapper: {
-    flexDirection: 'column', alignItems: 'center', gap: 12,
+    width: '100%', height: '100%',
+    flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
     position: 'relative',
   },
   simliVideo: {
-    width: 280,
-    height: 360,
-    objectFit: 'cover',
-    borderRadius: 20,
-    background: '#0d1535',
+    width: '100%',
+    height: '100%',
+    objectFit: 'contain',
+    background: 'transparent',
     display: 'block',
   },
   simliStateRow: {
@@ -703,20 +751,20 @@ const S = {
   },
   simliLoading: {
     display: 'flex', alignItems: 'center', gap: 10,
-    color: 'rgba(147,197,253,0.7)', fontSize: 13,
-    background: 'rgba(79,125,255,0.06)',
-    border: '1px solid rgba(79,125,255,0.15)',
+    color: '#2563eb', // Darker blue text
+    background: '#e0f2fe', // Light blue background
+    border: '1px solid #93c5fd', // Blue border
     padding: '10px 20px', borderRadius: 12,
   },
   simliLoadSpinner: {
     width: 16, height: 16, borderRadius: '50%',
-    border: '2px solid rgba(79,125,255,0.3)',
-    borderTopColor: '#4f7dff',
+    border: '2px solid #93c5fd', // Blue border
+    borderTopColor: '#2563eb', // Darker blue spinner
   },
   simliErrPill: {
-    fontSize: 11, color: 'rgba(253,186,116,0.7)',
-    background: 'rgba(251,146,60,0.06)',
-    border: '1px solid rgba(251,146,60,0.2)',
+    fontSize: 11, color: '#f97316', // Darker orange text
+    background: '#fff7ed', // Light orange background
+    border: '1px solid #fed7aa', // Orange border
     padding: '4px 12px', borderRadius: 20,
   },
 
@@ -726,43 +774,45 @@ const S = {
     marginTop: -4,
   },
   nameText: {
-    color: '#f0f0f8', fontSize: 16, fontWeight: 700, letterSpacing: '-0.2px',
+    color: '#111827', fontSize: 16, fontWeight: 700, letterSpacing: '-0.2px', // Dark text
   },
 
   toolPill: {
     display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
-    color: '#c4b5fd', background: 'rgba(168,85,247,0.1)',
-    padding: '5px 12px', borderRadius: 20, border: '1px solid rgba(168,85,247,0.25)',
+    color: '#7e22ce', background: '#f3e8ff', // Darker purple text, light purple background
+    padding: '5px 12px', borderRadius: 20, border: '1px solid #d8b4fe', // Purple border
   },
   toolSpin: { display: 'inline-block', fontSize: 14 },
   errPill: {
-    fontSize: 12, color: '#fca5a5', background: 'rgba(239,68,68,0.08)',
-    padding: '5px 12px', borderRadius: 20, border: '1px solid rgba(239,68,68,0.2)',
+    fontSize: 12, color: '#dc2626', background: '#fee2e2', // Darker red text, light red background
+    padding: '5px 12px', borderRadius: 20, border: '1px solid #fca5a5', // Red border
   },
 
   // Start overlay
   startOverlay: {
     position: 'absolute', inset: 0,
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: 14, background: 'rgba(7,7,15,0.88)', backdropFilter: 'blur(10px)',
+    gap: 14, background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(10px)', // Light background
     zIndex: 10,
   },
   startPersonaLabel: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 },
   startPersonaName: {
-    fontSize: 13, fontWeight: 600, color: 'rgba(147,197,253,0.8)',
-    background: 'rgba(79,125,255,0.1)', padding: '3px 12px', borderRadius: 20,
-    border: '1px solid rgba(79,125,255,0.2)',
+    fontSize: 13, fontWeight: 600, color: '#2563eb', // Darker blue text
+    background: '#e0f2fe', // Light blue background
+    padding: '3px 12px', borderRadius: 20,
+    border: '1px solid #93c5fd', // Blue border
   },
   startBtn: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
     padding: '18px 40px', borderRadius: 14, cursor: 'pointer', fontSize: 15, fontWeight: 600,
-    background: 'linear-gradient(135deg, rgba(79,125,255,0.2), rgba(168,85,247,0.15))',
-    border: '1px solid rgba(79,125,255,0.4)', color: '#eef0fa',
+    background: 'linear-gradient(135deg, #e0f2fe, #f3e8ff)', // Light gradient
+    border: '1px solid #93c5fd', // Blue border
+    color: '#111827', // Dark text
     transition: 'all 0.2s',
   },
-  micErr: { fontSize: 11, color: '#fca5a5', marginTop: 4 },
+  micErr: { fontSize: 11, color: '#dc2626', marginTop: 4 }, // Darker red
   startNote: {
-    fontSize: 11, color: 'rgba(238,240,250,0.35)', textAlign: 'center', lineHeight: 1.6,
+    fontSize: 11, color: '#4b5563', textAlign: 'center', lineHeight: 1.6, // Darker text
   },
 
   // Status strip at bottom of avatar pane
@@ -774,64 +824,78 @@ const S = {
     width: 8, height: 8, borderRadius: '50%',
     transition: 'background 0.3s ease, box-shadow 0.3s ease',
   },
-  statusTxt: { fontSize: 12, color: 'rgba(238,240,250,0.4)' },
+  statusTxt: { fontSize: 12, color: '#4b5563' }, // Darker text
   mutedBadge: {
-    fontSize: 11, color: '#fca5a5', background: 'rgba(239,68,68,0.08)',
+    fontSize: 11, color: '#dc2626', background: '#fee2e2', // Darker red text, light red background
     padding: '2px 8px', borderRadius: 8,
   },
 
   // ── Right pane ────────────────────────────────────────────────────────────
   rightPane: {
-    width: 340, display: 'flex', flexDirection: 'column',
-    padding: '12px 12px 12px 0', gap: 10, overflow: 'hidden',
+    width: 320, display: 'flex', flexDirection: 'column',
+    gap: 12, overflow: 'hidden', zIndex: 10,
+    pointerEvents: 'auto', // Allow clicks through to avatar? No, cards need pointers.
   },
   camCard: {
     borderRadius: 14, overflow: 'hidden', flexShrink: 0,
+    background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(12px)', // Light background
+    border: '1px solid #e5e7eb', pointerEvents: 'auto', // Light border
+    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
   },
   camHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '8px 12px',
-    borderBottom: '1px solid rgba(255,255,255,0.05)',
+    borderBottom: '1px solid #e5e7eb', // Light border
   },
-  camLabel: { fontSize: 12, fontWeight: 600, color: '#eef0fa' },
+  camLabel: { fontSize: 12, fontWeight: 600, color: '#111827' }, // Dark text
   camLive: {
     display: 'flex', alignItems: 'center', gap: 5,
-    fontSize: 11, color: '#22c55e', fontWeight: 600,
+    fontSize: 11, color: '#16a34a', fontWeight: 600, // Darker green
   },
   camLiveDot: {
     width: 6, height: 6, borderRadius: '50%', background: '#22c55e',
     display: 'inline-block', animation: 'dotPulse 1.5s ease-in-out infinite',
   },
-  camBox: { position: 'relative', height: 200, background: '#0d1535' },
+  camBox: { position: 'relative', height: 200, background: '#e5e7eb' }, // Light grey background
   video: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
   noCamera: {
     position: 'absolute', inset: 0,
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: 8, fontSize: 28, color: 'rgba(238,240,250,0.3)',
+    gap: 8, fontSize: 28, color: '#9ca3af', // Darker grey
   },
   noCamTxt: { fontSize: 12 },
 
   // Transcript
-  transcriptCard: { borderRadius: 14, overflow: 'hidden' },
+  transcriptCard: {
+    borderRadius: 14, overflow: 'hidden',
+    background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(12px)', // Light background
+    border: '1px solid #e5e7eb', flex: 1, display: 'flex', flexDirection: 'column', // Light border
+    pointerEvents: 'auto',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+  },
   transcriptHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '8px 12px', fontSize: 12, fontWeight: 600, color: '#eef0fa',
-    borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0,
+    padding: '8px 12px', fontSize: 12, fontWeight: 600, color: '#111827', // Dark text
+    borderBottom: '1px solid #e5e7eb', flexShrink: 0, // Light border
   },
   transcriptCount: {
-    fontSize: 10, color: 'rgba(238,240,250,0.35)',
-    background: 'rgba(255,255,255,0.04)', padding: '2px 8px', borderRadius: 10,
+    fontSize: 10, color: '#4b5563', // Darker text
+    background: '#f3f4f6', padding: '2px 8px', borderRadius: 10, // Light background
   },
   transcriptBody: { overflowY: 'auto', flex: 1, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 },
-  transcriptEmpty: { fontSize: 11, color: 'rgba(238,240,250,0.3)', textAlign: 'center', padding: '20px 0' },
+  transcriptEmpty: { fontSize: 11, color: '#9ca3af', textAlign: 'center', padding: '20px 0' }, // Darker grey
   transcriptEntry: { display: 'flex', flexDirection: 'column', gap: 2, padding: '6px 10px', borderRadius: 8 },
-  modelEntry: { background: 'rgba(79,125,255,0.06)', border: '1px solid rgba(79,125,255,0.1)' },
-  userEntry: { background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.1)' },
+  modelEntry: { background: '#e0f2fe', border: '1px solid #93c5fd' }, // Light blue
+  userEntry: { background: '#dcfce7', border: '1px solid #86efac' }, // Light green
   tRole: { fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' },
-  tText: { fontSize: 12, color: 'rgba(238,240,250,0.85)', lineHeight: 1.5 },
+  tText: { fontSize: 12, color: '#111827', lineHeight: 1.5 }, // Dark text
 
   // Tips
-  tipsCard: { borderRadius: 14, padding: '10px 12px', flexShrink: 0 },
+  tipsCard: {
+    borderRadius: 14, padding: '10px 12px', flexShrink: 0,
+    border: '1px solid rgba(255,255,255,0.1)',
+    pointerEvents: 'auto',
+  },
   tipsTitle: { fontSize: 11, fontWeight: 700, color: 'rgba(238,240,250,0.5)', marginBottom: 6, letterSpacing: '0.04em' },
   tipsList: { display: 'flex', flexDirection: 'column', gap: 4 },
   tip: { fontSize: 11, color: 'rgba(238,240,250,0.4)', lineHeight: 1.4 },

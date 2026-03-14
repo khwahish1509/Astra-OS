@@ -45,8 +45,8 @@
 import { useEffect, useRef, useState } from 'react'
 
 // ── FFT band helpers (24kHz, fftSize=256 → 128 bins, 93.75 Hz/bin) ──────────
-const BASS_START   = 0,  BASS_END   = 4
-const MID_START    = 5,  MID_END    = 20
+const BASS_START = 0, BASS_END = 4
+const MID_START = 5, MID_END = 20
 const TREBLE_START = 21, TREBLE_END = 50
 
 function bandAvg(data, start, end) {
@@ -60,15 +60,16 @@ function bandAvg(data, start, end) {
 // Tuned for a standard front-facing headshot (forehead at top, neck at bottom).
 const UPPER_FRAC = 0.58   // 0→58%  : forehead, eyes, nose — static
 const MOUTH_FRAC = 0.20   // 58→78% : lips, jaw — stretched by audio amplitude
-const CHIN_FRAC  = 0.22   // 78→100%: chin, neck — shifted down by stretch delta
+const CHIN_FRAC = 0.22   // 78→100%: chin, neck — shifted down by stretch delta
 const MAX_STRETCH = 0.40  // max 40% additional height at full volume
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function GeminiAvatar({
-  state       = 'idle',
+  state = 'idle',
   analyserNode = null,
-  name         = 'Agent',
-  base64Image  = null,
+  name = 'Agent',
+  base64Image = null,
+  fullScreen = false,
 }) {
   // ── Portrait image loader ──────────────────────────────────────────────
   // Load the base64 portrait into a JS Image object that drawImage can use.
@@ -82,7 +83,7 @@ export default function GeminiAvatar({
       return
     }
     const img = new Image()
-    img.onload  = () => { portraitRef.current = img; setPortraitReady(true) }
+    img.onload = () => { portraitRef.current = img; setPortraitReady(true) }
     img.onerror = () => { portraitRef.current = null; setPortraitReady(false) }
     // Normalise: accept both bare base64 and full data-URI strings
     img.src = base64Image.startsWith('data:')
@@ -92,19 +93,19 @@ export default function GeminiAvatar({
 
   // ── DOM refs — all updated by RAF (zero setState at 60fps) ────────────
   const portraitCanvasRef = useRef(null)   // the portrait + lip-sync canvas
-  const waveCanvasRef     = useRef(null)   // waveform strip (svg orb mode)
+  const waveCanvasRef = useRef(null)   // waveform strip (svg orb mode)
   // SVG orb mode refs
-  const ring1Ref        = useRef(null)
-  const ring2Ref        = useRef(null)
-  const ring3Ref        = useRef(null)
-  const faceRef         = useRef(null)
-  const mouthClosedRef  = useRef(null)
-  const mouthOpenRef    = useRef(null)
-  const mouthTeethRef   = useRef(null)
+  const ring1Ref = useRef(null)
+  const ring2Ref = useRef(null)
+  const ring3Ref = useRef(null)
+  const faceRef = useRef(null)
+  const mouthClosedRef = useRef(null)
+  const mouthOpenRef = useRef(null)
+  const mouthTeethRef = useRef(null)
 
   // ── RAF handle + state ref (avoids stale closure) ─────────────────────
-  const rafRef       = useRef(null)
-  const stateRef     = useRef(state)
+  const rafRef = useRef(null)
+  const stateRef = useRef(state)
   useEffect(() => { stateRef.current = state }, [state])
 
   // ── Smoothed amplitude (exponential moving average, lives in a ref) ───
@@ -134,14 +135,14 @@ export default function GeminiAvatar({
       if (ring1Ref.current) ring1Ref.current.style.transform = 'translate(-50%,-50%) scale(1)'
       if (ring2Ref.current) ring2Ref.current.style.transform = 'translate(-50%,-50%) scale(1)'
       if (ring3Ref.current) ring3Ref.current.style.transform = 'translate(-50%,-50%) scale(1)'
-      if (faceRef.current)  faceRef.current.style.transform  = 'scale(1)'
+      if (faceRef.current) faceRef.current.style.transform = 'scale(1)'
       // Clear portrait canvas
       const pc = portraitCanvasRef.current
       if (pc) pc.getContext('2d').clearRect(0, 0, pc.width, pc.height)
       return
     }
 
-    const bufLen   = analyserNode.frequencyBinCount   // 128
+    const bufLen = analyserNode.frequencyBinCount   // 128
     const freqData = new Uint8Array(bufLen)
     const timeData = new Uint8Array(bufLen)
 
@@ -151,8 +152,8 @@ export default function GeminiAvatar({
       analyserNode.getByteFrequencyData(freqData)
       analyserNode.getByteTimeDomainData(timeData)
 
-      const bass   = bandAvg(freqData, BASS_START,   BASS_END)
-      const mid    = bandAvg(freqData, MID_START,    MID_END)
+      const bass = bandAvg(freqData, BASS_START, BASS_END)
+      const mid = bandAvg(freqData, MID_START, MID_END)
       const treble = bandAvg(freqData, TREBLE_START, TREBLE_END)
       const energy = bass * 0.5 + mid * 0.35 + treble * 0.15
       const curState = stateRef.current
@@ -165,9 +166,9 @@ export default function GeminiAvatar({
       // PORTRAIT MODE — all rendering inside one canvas
       // ─────────────────────────────────────────────────────────────────
       const portrait = portraitRef.current
-      const pCanvas  = portraitCanvasRef.current
+      const pCanvas = portraitCanvasRef.current
       if (portrait && pCanvas) {
-        _drawPortrait(pCanvas, portrait, amp, energy, curState)
+        _drawPortrait(pCanvas, portrait, amp, energy, curState, fullScreen)
       }
 
       // ─────────────────────────────────────────────────────────────────
@@ -176,21 +177,21 @@ export default function GeminiAvatar({
       if (ring1Ref.current) {
         const s = 1 + bass * 0.10
         ring1Ref.current.style.transform = `translate(-50%,-50%) scale(${s.toFixed(3)})`
-        ring1Ref.current.style.opacity   =
+        ring1Ref.current.style.opacity =
           String((curState !== 'idle' ? 0.12 + bass * 0.3 : 0.06).toFixed(3))
       }
       if (ring2Ref.current) {
         const s = 1 + mid * 0.14
         ring2Ref.current.style.transform = `translate(-50%,-50%) scale(${s.toFixed(3)})`
-        ring2Ref.current.style.opacity   = String((
-          curState === 'speaking'  ? 0.08 + mid * 0.25 :
-          curState === 'listening' ? 0.06 + mid * 0.15 : 0.04
+        ring2Ref.current.style.opacity = String((
+          curState === 'speaking' ? 0.08 + mid * 0.25 :
+            curState === 'listening' ? 0.06 + mid * 0.15 : 0.04
         ).toFixed(3))
       }
       if (ring3Ref.current) {
         const s = 1 + treble * 0.18
         ring3Ref.current.style.transform = `translate(-50%,-50%) scale(${s.toFixed(3)})`
-        ring3Ref.current.style.opacity   = String((
+        ring3Ref.current.style.opacity = String((
           (curState === 'speaking' || curState === 'listening') ? treble * 0.18 : 0
         ).toFixed(3))
       }
@@ -204,9 +205,9 @@ export default function GeminiAvatar({
           faceRef.current.style.transform = `scale(${fs.toFixed(4)})`
         }
         const mouthOpen = curState === 'speaking' ? Math.min(1, energy * 4) : 0
-        const mouthH    = 4 + mouthOpen * 14
-        const mouthY    = 62 - mouthOpen * 4
-        const isOpen    = mouthOpen >= 0.12
+        const mouthH = 4 + mouthOpen * 14
+        const mouthY = 62 - mouthOpen * 4
+        const isOpen = mouthOpen >= 0.12
         if (mouthClosedRef.current) {
           mouthClosedRef.current.style.display = isOpen ? 'none' : ''
           if (!isOpen)
@@ -231,7 +232,13 @@ export default function GeminiAvatar({
         if (wc) {
           const ctx2d = wc.getContext('2d')
           const W = wc.width, H = wc.height
-          ctx2d.clearRect(0, 0, W, H)
+          if (fullScreen) {
+            // Clear with soft light grey to match InterviewRoom.jsx light theme
+            ctx2d.fillStyle = '#f9fafb'
+            ctx2d.fillRect(0, 0, W, H)
+          } else {
+            ctx2d.clearRect(0, 0, W, H)
+          }
           if (curState === 'speaking' && energy > 0.01) {
             ctx2d.beginPath()
             const sliceW = W / bufLen
@@ -243,11 +250,11 @@ export default function GeminiAvatar({
             const grad = ctx2d.createLinearGradient(0, 0, W, 0)
             const a1 = (0.3 + energy * 0.55).toFixed(2)
             const a2 = (0.45 + energy * 0.55).toFixed(2)
-            grad.addColorStop(0,   `rgba(79,125,255,${a1})`)
+            grad.addColorStop(0, `rgba(79,125,255,${a1})`)
             grad.addColorStop(0.5, `rgba(168,85,247,${a2})`)
-            grad.addColorStop(1,   `rgba(79,125,255,${a1})`)
+            grad.addColorStop(1, `rgba(79,125,255,${a1})`)
             ctx2d.strokeStyle = grad
-            ctx2d.lineWidth   = 2.5
+            ctx2d.lineWidth = 2.5
             ctx2d.stroke()
           }
         }
@@ -259,17 +266,22 @@ export default function GeminiAvatar({
   }, [analyserNode])   // only re-create the loop when the analyser changes
 
   // ── Glow color (React state — slow update is fine here) ───────────────
-  const glowColor = state === 'thinking'  ? 'rgba(168,85,247,0.35)'
+  const glowColor = state === 'thinking' ? 'rgba(168,85,247,0.35)'
     : state === 'listening' ? 'rgba(79,125,255,0.4)'
-    : state === 'speaking'  ? 'rgba(79,125,255,0.6)'
-    :                          'rgba(79,125,255,0.2)'
+      : state === 'speaking' ? 'rgba(79,125,255,0.6)'
+        : 'rgba(79,125,255,0.2)'
 
   const isPortraitMode = !!(base64Image && portraitReady)
-  const SIZE = isPortraitMode ? PORTRAIT_SIZE : ORB_SIZE
+  // In fullScreen mode, we ignore fixed constants and tell the component to fill its parent.
+  // The sizing is handled by CSS (width:100% height:100%) and internal canvas resize logic.
+  const SIZE = fullScreen ? 600 : (isPortraitMode ? PORTRAIT_SIZE : ORB_SIZE)
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (
-    <div style={{ ...styles.wrapper, width: SIZE, height: SIZE + 90 }}>
+    <div style={{
+      ...styles.wrapper,
+      ...(fullScreen ? { width: '100%', height: '100%', marginBottom: 0 } : { width: SIZE, height: SIZE + 90 })
+    }}>
 
       {/* ── FFT-driven rings (both modes) ── */}
       <div ref={ring3Ref} style={{ ...styles.ring, width: SIZE + 80, height: SIZE + 80, opacity: 0 }} />
@@ -287,16 +299,21 @@ export default function GeminiAvatar({
         <div
           style={{
             ...styles.avatarContainer,
-            width: SIZE, height: SIZE,
-            boxShadow: `0 0 40px ${glowColor}, 0 0 80px ${glowColor.replace(/[\d.]+\)$/, v => (parseFloat(v)*0.4).toFixed(2)+')')}`,
+            ...(fullScreen
+              ? { width: '100%', height: '100%', borderRadius: 0, border: 'none' }
+              : { width: SIZE, height: SIZE, borderRadius: '50%' }),
+            boxShadow: fullScreen ? 'none' : `0 0 40px ${glowColor}, 0 0 80px ${glowColor.replace(/[\d.]+\)$/, v => (parseFloat(v) * 0.4).toFixed(2) + ')')}`,
             transition: 'box-shadow 0.3s ease',
           }}
         >
           <canvas
             ref={portraitCanvasRef}
-            width={SIZE}
-            height={SIZE}
-            style={styles.portraitCanvas}
+            width={fullScreen ? 1280 : SIZE}
+            height={fullScreen ? 720 : SIZE}
+            style={{
+              ...styles.portraitCanvas,
+              ...(fullScreen ? { borderRadius: 0, width: '100%', height: '100%', objectFit: 'cover' } : {})
+            }}
           />
 
           {/* State indicator dot */}
@@ -304,10 +321,10 @@ export default function GeminiAvatar({
             ...styles.stateDot,
             background: state === 'speaking' ? '#22c55e'
               : state === 'listening' ? '#4f7dff'
-              : state === 'thinking'  ? '#a855f7' : '#64748b',
+                : state === 'thinking' ? '#a855f7' : '#64748b',
             boxShadow: `0 0 8px ${state === 'speaking' ? '#22c55e'
               : state === 'listening' ? '#4f7dff'
-              : state === 'thinking'  ? '#a855f7' : 'transparent'}`,
+                : state === 'thinking' ? '#a855f7' : 'transparent'}`,
             animation: state !== 'idle' ? 'dotPulse 1.2s ease-in-out infinite' : 'none',
           }} />
 
@@ -329,7 +346,7 @@ export default function GeminiAvatar({
           style={{
             ...styles.face,
             width: SIZE, height: SIZE,
-            boxShadow: `0 0 40px ${glowColor}, 0 0 80px ${glowColor.replace(/[\d.]+\)$/, v => (parseFloat(v)*0.4).toFixed(2)+')')}`,
+            boxShadow: `0 0 40px ${glowColor}, 0 0 80px ${glowColor.replace(/[\d.]+\)$/, v => (parseFloat(v) * 0.4).toFixed(2) + ')')}`,
             transition: 'box-shadow 0.3s ease',
           }}
         >
@@ -380,31 +397,33 @@ export default function GeminiAvatar({
             ...styles.stateDot,
             background: state === 'speaking' ? '#22c55e'
               : state === 'listening' ? '#4f7dff'
-              : state === 'thinking'  ? '#a855f7' : '#64748b',
+                : state === 'thinking' ? '#a855f7' : '#64748b',
             boxShadow: `0 0 8px ${state === 'speaking' ? '#22c55e'
               : state === 'listening' ? '#4f7dff'
-              : state === 'thinking'  ? '#a855f7' : 'transparent'}`,
+                : state === 'thinking' ? '#a855f7' : 'transparent'}`,
             animation: state !== 'idle' ? 'dotPulse 1.2s ease-in-out infinite' : 'none',
           }} />
         </div>
       )}
 
-      {/* ── Name + state label ── */}
-      <div style={styles.nameRow}>
-        <span style={styles.nameText}>{name}</span>
-        <span style={{
-          ...styles.stateLabel,
-          color: state === 'speaking' ? '#86efac'
-            : state === 'listening' ? '#93c5fd'
-            : state === 'thinking'  ? '#c4b5fd'
-            : '#64748b',
-        }}>
-          {state === 'speaking'  ? '● Speaking'
-            : state === 'listening' ? '◎ Listening'
-            : state === 'thinking'  ? '⟳ Thinking...'
-            : '○ Idle'}
-        </span>
-      </div>
+      {/* ── Name + state label (Hidden in fullScreen as InterviewRoom handles it) ── */}
+      {!fullScreen && (
+        <div style={styles.nameRow}>
+          <span style={styles.nameText}>{name}</span>
+          <span style={{
+            ...styles.stateLabel,
+            color: state === 'speaking' ? '#86efac'
+              : state === 'listening' ? '#93c5fd'
+                : state === 'thinking' ? '#c4b5fd'
+                  : '#64748b',
+          }}>
+            {state === 'speaking' ? '● Speaking'
+              : state === 'listening' ? '◎ Listening'
+                : state === 'thinking' ? '⟳ Thinking...'
+                  : '○ Idle'}
+          </span>
+        </div>
+      )}
 
       {/* ── Waveform strip — SVG orb mode only ── */}
       {!isPortraitMode && (
@@ -424,47 +443,60 @@ export default function GeminiAvatar({
 
 // ── Portrait drawing (kept outside the component to avoid closure allocations) ──
 // Called from inside the RAF loop — must be as fast as possible.
-function _drawPortrait(canvas, img, amp, energy, curState) {
+function _drawPortrait(canvas, img, amp, energy, curState, fullScreen) {
   const ctx = canvas.getContext('2d', { alpha: false })
-  const CW  = canvas.width
-  const CH  = canvas.height
-  const IW  = img.naturalWidth
-  const IH  = img.naturalHeight
+  const CW = canvas.width
+  const CH = canvas.height
+  const IW = img.naturalWidth
+  const IH = img.naturalHeight
 
-  // ── 1. Clip everything to a circle (the "avatar orb" shape) ───────────
-  ctx.save()
-  ctx.beginPath()
-  ctx.arc(CW / 2, CH / 2, CW / 2, 0, Math.PI * 2)
-  ctx.clip()
+  // ── 1. Optional Clip to circle (only if NOT fullScreen) ───────────
+  if (!fullScreen) {
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(CW / 2, CH / 2, CW / 2, 0, Math.PI * 2)
+    ctx.clip()
+  }
 
-  // Fill background so clipped corners are dark, not transparent
-  ctx.fillStyle = '#0d1535'
-  ctx.fillRect(0, 0, CW, CH)
+  // Fill background
+  if (fullScreen) {
+    ctx.clearRect(0, 0, CW, CH)
+  } else {
+    ctx.fillStyle = '#0f0f17'
+    ctx.fillRect(0, 0, CW, CH)
+  }
 
   // ── 2. Draw portrait in three slices (the lip-sync magic) ─────────────
+  // In full-screen, we apply a global 0.9 scale factor (10% safety margin) 
+  // to avoid the face hitting the top of the monitor.
+  const MARGIN_SCALE = fullScreen ? 0.9 : 1.0
+  const BOX_SIZE = Math.min(CW, CH) * MARGIN_SCALE
+  const dX = (CW - BOX_SIZE) / 2
+  const dY = (CH - BOX_SIZE) / 2
+
   // Stretch factor: 1.0 (mouth closed) → 1 + MAX_STRETCH (mouth fully open)
-  const stretch  = 1 + amp * MAX_STRETCH
-  const dUpperH  = CH * UPPER_FRAC
-  const dMouthH  = CH * MOUTH_FRAC * stretch
-  const dChinY   = dUpperH + dMouthH
+  const stretch = 1 + amp * MAX_STRETCH
+  const dUpperH = BOX_SIZE * UPPER_FRAC
+  const dMouthH = BOX_SIZE * MOUTH_FRAC * stretch
+  const dChinY = dY + dUpperH + dMouthH
 
   // Upper slice — forehead + eyes + nose (perfectly static)
   ctx.drawImage(
     img,
-    0,          0,               IW, IH * UPPER_FRAC,
-    0,          0,               CW, dUpperH,
+    0, 0, IW, IH * UPPER_FRAC,
+    dX, dY, BOX_SIZE, dUpperH,
   )
   // Mouth slice — stretched vertically by audio amplitude
   ctx.drawImage(
     img,
-    0,          IH * UPPER_FRAC,                  IW, IH * MOUTH_FRAC,
-    0,          dUpperH,                           CW, dMouthH,
+    0, IH * UPPER_FRAC, IW, IH * MOUTH_FRAC,
+    dX, dY + dUpperH, BOX_SIZE, dMouthH,
   )
   // Chin slice — shifted down by the stretch delta
   ctx.drawImage(
     img,
-    0,          IH * (UPPER_FRAC + MOUTH_FRAC),   IW, IH * CHIN_FRAC,
-    0,          dChinY,                            CW, CH - dChinY + 4,  // +4 avoids a hairline gap
+    0, IH * (UPPER_FRAC + MOUTH_FRAC), IW, IH * CHIN_FRAC,
+    dX, dChinY, BOX_SIZE, BOX_SIZE - (dUpperH + dMouthH) + 4,
   )
 
   // ── 3. Teeth flash — a bright rect that fades in as mouth opens ────────
@@ -473,7 +505,7 @@ function _drawPortrait(canvas, img, amp, energy, curState) {
   if (amp > 0.22) {
     const teethAlpha = Math.min(0.85, (amp - 0.22) / 0.4)
     ctx.globalAlpha = teethAlpha
-    ctx.fillStyle   = '#fffdf8'
+    ctx.fillStyle = '#fffdf8'
     const ty = dUpperH + dMouthH * 0.24
     const th = dMouthH * 0.30
     const tx = CW * 0.31
@@ -496,30 +528,31 @@ function _drawPortrait(canvas, img, amp, energy, curState) {
     ctx.globalAlpha = energy * 0.22
     const gx = CW / 2, gy = CH * 0.68
     const glow = ctx.createRadialGradient(gx, gy, 0, gx, gy, CW * 0.42)
-    glow.addColorStop(0,   '#4f7dff')
+    glow.addColorStop(0, '#4f7dff')
     glow.addColorStop(0.6, 'rgba(79,125,255,0.3)')
-    glow.addColorStop(1,   'rgba(79,125,255,0)')
+    glow.addColorStop(1, 'rgba(79,125,255,0)')
     ctx.fillStyle = glow
     ctx.fillRect(0, 0, CW, CH)
     ctx.globalCompositeOperation = 'source-over'
     ctx.globalAlpha = 1
   }
 
-  ctx.restore()
+  if (!fullScreen) ctx.restore()
 
-  // ── 5. Circle border — brightness pulses with audio energy ─────────────
-  // Drawn OUTSIDE the clip so it frames the circle cleanly.
-  const borderAlpha = 0.28 + energy * 0.55
-  ctx.strokeStyle = `rgba(79,125,255,${borderAlpha.toFixed(3)})`
-  ctx.lineWidth   = 2.5
-  ctx.beginPath()
-  ctx.arc(CW / 2, CH / 2, CW / 2 - 1.5, 0, Math.PI * 2)
-  ctx.stroke()
+  // ── 5. Circle border — only if NOT fullScreen ─────────────
+  if (!fullScreen) {
+    const borderAlpha = 0.28 + energy * 0.55
+    ctx.strokeStyle = `rgba(79,125,255,${borderAlpha.toFixed(3)})`
+    ctx.lineWidth = 2.5
+    ctx.beginPath()
+    ctx.arc(CW / 2, CH / 2, CW / 2 - 1.5, 0, Math.PI * 2)
+    ctx.stroke()
+  }
 }
 
 // ── Size constants ────────────────────────────────────────────────────────────
 const PORTRAIT_SIZE = 240   // portrait canvas — larger for photorealistic impact
-const ORB_SIZE      = 200   // SVG orb fallback — original size
+const ORB_SIZE = 200   // SVG orb fallback — original size
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const styles = {
@@ -536,7 +569,7 @@ const styles = {
     top: '50%',
     left: '50%',
     borderRadius: '50%',
-    border: '1.5px solid rgba(79,125,255,0.6)',
+    border: '1.5px solid rgba(59, 130, 246, 0.4)', // Softer blue for light theme
     transform: 'translate(-50%, -50%)',
     pointerEvents: 'none',
     // No CSS transition — driven by RAF for zero-lag
@@ -548,7 +581,7 @@ const styles = {
     position: 'relative',
     flexShrink: 0,
     overflow: 'hidden',
-    border: '2px solid rgba(79,125,255,0.3)',
+    border: '2px solid rgba(59, 130, 246, 0.2)',
   },
   portraitCanvas: {
     display: 'block',

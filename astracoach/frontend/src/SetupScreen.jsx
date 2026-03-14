@@ -146,22 +146,22 @@ Replace everything in [brackets] with your own content.`,
 ]
 
 export default function SetupScreen({ onStart }) {
-  const [selectedId,  setSelectedId]  = useState('interview')
-  const [prompt,      setPrompt]      = useState(TEMPLATES[0].prompt)
+  const [selectedId, setSelectedId] = useState('interview')
+  const [prompt, setPrompt] = useState(TEMPLATES[0].prompt)
   const [personaName, setPersonaName] = useState(TEMPLATES[0].name)
-  const [userName,    setUserName]    = useState('')
-  const [voice,       setVoice]       = useState('Aoede')
-  const [voices,      setVoices]      = useState([])
-  const [tab,         setTab]         = useState('templates')  // 'templates' | 'editor'
-  const [loading,      setLoading]     = useState(false)
-  const [loadingStep,  setLoadingStep] = useState(null)   // 'avatar' | 'session' | null
-  const [error,        setError]       = useState('')
+  const [userName, setUserName] = useState('')
+  const [voice, setVoice] = useState('Puck')
+  const [voices, setVoices] = useState([])
+  const [tab, setTab] = useState('templates')  // 'templates' | 'editor'
+  const [loading, setLoading] = useState(false)
+  const [loadingStep, setLoadingStep] = useState(null)   // 'avatar' | 'session' | null
+  const [error, setError] = useState('')
 
   useEffect(() => {
     fetch(`${BACKEND}/api/voices`)
       .then(r => r.json())
       .then(d => setVoices(d.voices || []))
-      .catch(() => {})
+      .catch(() => { })
   }, [])
 
   const selectTemplate = (tpl) => {
@@ -182,9 +182,9 @@ export default function SetupScreen({ onStart }) {
     setLoadingStep('avatar')
     try {
       const avatarRes = await fetch(`${BACKEND}/api/generate-avatar`, {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
+        body: JSON.stringify({
           persona_description: personaName.trim() || 'a professional AI assistant',
         }),
       })
@@ -204,13 +204,13 @@ export default function SetupScreen({ onStart }) {
     setLoadingStep('session')
     try {
       const res = await fetch(`${BACKEND}/api/session/create`, {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          persona_name:  personaName.trim() || 'AI Agent',
+        body: JSON.stringify({
+          persona_name: personaName.trim() || 'AI Agent',
           system_prompt: prompt.trim(),
           voice,
-          user_name:     userName.trim(),
+          user_name: userName.trim(),
         }),
       })
       if (!res.ok) {
@@ -251,7 +251,7 @@ export default function SetupScreen({ onStart }) {
           </p>
 
           <div style={S.pillRow}>
-            {['Hears you','Sees you','Speaks back','Any persona'].map(p => (
+            {['Hears you', 'Sees you', 'Speaks back', 'Any persona'].map(p => (
               <span key={p} style={S.pill}>{p}</span>
             ))}
           </div>
@@ -287,7 +287,7 @@ export default function SetupScreen({ onStart }) {
           {tab === 'editor' && (
             <>
               <div style={S.editorHeader}>
-                <span style={{ ...S.tplIcon, fontSize:20 }}>{selectedTpl.icon}</span>
+                <span style={{ ...S.tplIcon, fontSize: 20 }}>{selectedTpl.icon}</span>
                 <input style={S.nameInput} value={personaName}
                   onChange={e => setPersonaName(e.target.value)}
                   placeholder="Persona name…" />
@@ -330,7 +330,7 @@ export default function SetupScreen({ onStart }) {
                 ) : (
                   <select style={S.settingInput} value={voice}
                     onChange={e => setVoice(e.target.value)}>
-                    {['Aoede','Puck','Charon','Kore','Fenrir','Leda','Orus','Zephyr'].map(v => (
+                    {['Aoede', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Zephyr'].map(v => (
                       <option key={v} value={v}>{v}</option>
                     ))}
                   </select>
@@ -365,8 +365,8 @@ export default function SetupScreen({ onStart }) {
             {loadingStep === 'avatar'
               ? <><span style={S.spinner} className="spin" /> Generating portrait via Imagen 3…</>
               : loadingStep === 'session'
-              ? <><span style={S.spinner} className="spin" /> Launching agent…</>
-              : <><span>🚀</span> Launch {personaName || 'Agent'}</>
+                ? <><span style={S.spinner} className="spin" /> Launching agent…</>
+                : <><span>🚀</span> Launch {personaName || 'Agent'}</>
             }
           </button>
 
@@ -380,78 +380,116 @@ export default function SetupScreen({ onStart }) {
 }
 
 const S = {
-  root: { minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center',
-          padding:24, position:'relative', overflow:'hidden' },
-  blob1: { position:'fixed', width:800, height:800, borderRadius:'50%', top:-300, left:-300,
-           background:'radial-gradient(circle,rgba(79,125,255,0.1) 0%,transparent 70%)',
-           pointerEvents:'none' },
-  blob2: { position:'fixed', width:700, height:700, borderRadius:'50%', bottom:-250, right:-250,
-           background:'radial-gradient(circle,rgba(168,85,247,0.08) 0%,transparent 70%)',
-           pointerEvents:'none' },
-  shell: { display:'flex', gap:24, maxWidth:980, width:'100%', alignItems:'flex-start' },
-  left: { width:340, flexShrink:0, display:'flex', flexDirection:'column', gap:16 },
-  logoRow: { display:'flex', alignItems:'center', gap:12 },
-  logoMark: { width:42, height:42, borderRadius:12, background:'linear-gradient(135deg,#4f7dff,#a855f7)',
-              display:'flex', alignItems:'center', justifyContent:'center',
-              fontSize:20, fontWeight:900, color:'white', flexShrink:0 },
-  logoTitle: { fontSize:20, fontWeight:700, color:'#eef0fa' },
-  logoSub: { fontSize:11, color:'rgba(238,240,250,0.4)' },
-  pitch: { fontSize:13, color:'rgba(238,240,250,0.6)', lineHeight:1.7,
-           borderLeft:'2px solid rgba(79,125,255,0.4)', paddingLeft:12 },
-  pillRow: { display:'flex', flexWrap:'wrap', gap:5 },
-  pill: { fontSize:10, fontWeight:600, padding:'3px 9px', borderRadius:20,
-          background:'rgba(79,125,255,0.1)', color:'rgba(79,125,255,0.85)',
-          border:'1px solid rgba(79,125,255,0.2)' },
-  tplLabel: { fontSize:11, fontWeight:600, color:'rgba(238,240,250,0.4)',
-              textTransform:'uppercase', letterSpacing:'0.06em' },
-  tplGrid: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 },
-  tplCard: { padding:'12px 10px', borderRadius:12, border:'1px solid rgba(255,255,255,0.07)',
-             background:'rgba(255,255,255,0.02)', cursor:'pointer', textAlign:'left',
-             position:'relative', transition:'all 0.2s' },
-  tplActive: { },
-  tplDot: { position:'absolute', top:8, right:8, width:7, height:7, borderRadius:'50%' },
-  tplIcon: { fontSize:22, display:'block', marginBottom:5 },
-  tplName: { fontSize:12, fontWeight:700, color:'#eef0fa', marginBottom:2 },
-  tplTagline: { fontSize:10, color:'rgba(238,240,250,0.4)', lineHeight:1.4 },
-  right: { flex:1, display:'flex', flexDirection:'column', gap:0, overflow:'hidden', minHeight:500 },
-  tabRow: { display:'flex', borderBottom:'1px solid rgba(255,255,255,0.06)', padding:'0 4px' },
-  tabBtn: { padding:'11px 16px', fontSize:12, fontWeight:600, color:'rgba(238,240,250,0.45)',
-            background:'none', border:'none', cursor:'pointer', borderBottom:'2px solid transparent',
-            marginBottom:'-1px', transition:'all 0.2s' },
-  tabActive: { color:'#4f7dff', borderBottomColor:'#4f7dff' },
-  editorHeader: { display:'flex', alignItems:'center', gap:10, padding:'14px 16px 0' },
-  nameInput: { flex:1, background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)',
-               borderRadius:8, padding:'7px 10px', color:'#eef0fa', fontSize:14,
-               fontWeight:600, outline:'none', fontFamily:'inherit' },
-  promptHelp: { fontSize:11, color:'rgba(238,240,250,0.35)', padding:'8px 16px 0', lineHeight:1.5 },
-  promptArea: { margin:'10px 16px 0', borderRadius:10, background:'rgba(255,255,255,0.03)',
-                border:'1px solid rgba(255,255,255,0.08)', color:'#eef0fa', fontSize:12,
-                lineHeight:1.7, padding:'12px 14px', resize:'vertical', outline:'none',
-                fontFamily:'inherit', minHeight:220 },
-  charCount: { fontSize:10, color:'rgba(238,240,250,0.2)', textAlign:'right',
-               padding:'4px 18px 0' },
-  settingsPane: { padding:'14px 16px', display:'flex', flexDirection:'column', gap:18, flex:1 },
-  settingGroup: { display:'flex', flexDirection:'column', gap:5 },
-  settingLabel: { fontSize:11, fontWeight:600, color:'rgba(238,240,250,0.45)',
-                  textTransform:'uppercase', letterSpacing:'0.05em' },
-  settingInput: { background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.09)',
-                  borderRadius:8, padding:'8px 11px', color:'#eef0fa', fontSize:13,
-                  outline:'none', fontFamily:'inherit' },
-  settingHint: { fontSize:10, color:'rgba(238,240,250,0.28)' },
-  toolItem: { display:'flex', alignItems:'center', gap:8, fontSize:12,
-              color:'rgba(238,240,250,0.55)', padding:'3px 0' },
-  toolCheck: { color:'#22c55e', fontWeight:700 },
-  error: { margin:'0 16px', background:'rgba(239,68,68,0.08)',
-           border:'1px solid rgba(239,68,68,0.3)', borderRadius:8,
-           padding:'9px 12px', color:'#fca5a5', fontSize:12 },
-  launchBtn: { margin:'12px 16px 8px', padding:'13px', borderRadius:11,
-               background:'linear-gradient(135deg,#4f7dff,#7c3aed)',
-               border:'none', color:'white', fontSize:14, fontWeight:700,
-               cursor:'pointer', display:'flex', alignItems:'center',
-               justifyContent:'center', gap:10, transition:'opacity 0.2s' },
-  launchLoading: { opacity:0.65, cursor:'not-allowed' },
-  spinner: { width:15, height:15, border:'2px solid rgba(255,255,255,0.3)',
-             borderTopColor:'white', borderRadius:'50%', display:'inline-block' },
-  footer: { fontSize:10, color:'rgba(238,240,250,0.22)', textAlign:'center',
-            padding:'0 16px 14px' },
+  root: {
+    minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: 24, position: 'relative', overflow: 'hidden'
+  },
+  blob1: {
+    position: 'fixed', width: 800, height: 800, borderRadius: '50%', top: -300, left: -300,
+    background: 'radial-gradient(circle,rgba(79,125,255,0.1) 0%,transparent 70%)',
+    pointerEvents: 'none'
+  },
+  blob2: {
+    position: 'fixed', width: 700, height: 700, borderRadius: '50%', bottom: -250, right: -250,
+    background: 'radial-gradient(circle,rgba(168,85,247,0.08) 0%,transparent 70%)',
+    pointerEvents: 'none'
+  },
+  shell: { display: 'flex', gap: 24, maxWidth: 980, width: '100%', alignItems: 'flex-start' },
+  left: { width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 16 },
+  logoRow: { display: 'flex', alignItems: 'center', gap: 12 },
+  logoMark: {
+    width: 42, height: 42, borderRadius: 12, background: 'linear-gradient(135deg,#4f7dff,#a855f7)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 20, fontWeight: 900, color: 'white', flexShrink: 0
+  },
+  logoTitle: { fontSize: 20, fontWeight: 700, color: '#eef0fa' },
+  logoSub: { fontSize: 11, color: 'rgba(238,240,250,0.4)' },
+  pitch: {
+    fontSize: 13, color: 'rgba(238,240,250,0.6)', lineHeight: 1.7,
+    borderLeft: '2px solid rgba(79,125,255,0.4)', paddingLeft: 12
+  },
+  pillRow: { display: 'flex', flexWrap: 'wrap', gap: 5 },
+  pill: {
+    fontSize: 10, fontWeight: 600, padding: '3px 9px', borderRadius: 20,
+    background: 'rgba(79,125,255,0.1)', color: 'rgba(79,125,255,0.85)',
+    border: '1px solid rgba(79,125,255,0.2)'
+  },
+  tplLabel: {
+    fontSize: 11, fontWeight: 600, color: 'rgba(238,240,250,0.4)',
+    textTransform: 'uppercase', letterSpacing: '0.06em'
+  },
+  tplGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 },
+  tplCard: {
+    padding: '12px 10px', borderRadius: 12, border: '1px solid rgba(255,255,255,0.07)',
+    background: 'rgba(255,255,255,0.02)', cursor: 'pointer', textAlign: 'left',
+    position: 'relative', transition: 'all 0.2s'
+  },
+  tplActive: {},
+  tplDot: { position: 'absolute', top: 8, right: 8, width: 7, height: 7, borderRadius: '50%' },
+  tplIcon: { fontSize: 22, display: 'block', marginBottom: 5 },
+  tplName: { fontSize: 12, fontWeight: 700, color: '#eef0fa', marginBottom: 2 },
+  tplTagline: { fontSize: 10, color: 'rgba(238,240,250,0.4)', lineHeight: 1.4 },
+  right: { flex: 1, display: 'flex', flexDirection: 'column', gap: 0, overflow: 'hidden', minHeight: 500 },
+  tabRow: { display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.06)', padding: '0 4px' },
+  tabBtn: {
+    padding: '11px 16px', fontSize: 12, fontWeight: 600, color: 'rgba(238,240,250,0.45)',
+    background: 'none', border: 'none', cursor: 'pointer', borderBottom: '2px solid transparent',
+    marginBottom: '-1px', transition: 'all 0.2s'
+  },
+  tabActive: { color: '#4f7dff', borderBottomColor: '#4f7dff' },
+  editorHeader: { display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px 0' },
+  nameInput: {
+    flex: 1, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: 8, padding: '7px 10px', color: '#eef0fa', fontSize: 14,
+    fontWeight: 600, outline: 'none', fontFamily: 'inherit'
+  },
+  promptHelp: { fontSize: 11, color: 'rgba(238,240,250,0.35)', padding: '8px 16px 0', lineHeight: 1.5 },
+  promptArea: {
+    margin: '10px 16px 0', borderRadius: 10, background: 'rgba(255,255,255,0.03)',
+    border: '1px solid rgba(255,255,255,0.08)', color: '#eef0fa', fontSize: 12,
+    lineHeight: 1.7, padding: '12px 14px', resize: 'vertical', outline: 'none',
+    fontFamily: 'inherit', minHeight: 220
+  },
+  charCount: {
+    fontSize: 10, color: 'rgba(238,240,250,0.2)', textAlign: 'right',
+    padding: '4px 18px 0'
+  },
+  settingsPane: { padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 18, flex: 1 },
+  settingGroup: { display: 'flex', flexDirection: 'column', gap: 5 },
+  settingLabel: {
+    fontSize: 11, fontWeight: 600, color: 'rgba(238,240,250,0.45)',
+    textTransform: 'uppercase', letterSpacing: '0.05em'
+  },
+  settingInput: {
+    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)',
+    borderRadius: 8, padding: '8px 11px', color: '#eef0fa', fontSize: 13,
+    outline: 'none', fontFamily: 'inherit'
+  },
+  settingHint: { fontSize: 10, color: 'rgba(238,240,250,0.28)' },
+  toolItem: {
+    display: 'flex', alignItems: 'center', gap: 8, fontSize: 12,
+    color: 'rgba(238,240,250,0.55)', padding: '3px 0'
+  },
+  toolCheck: { color: '#22c55e', fontWeight: 700 },
+  error: {
+    margin: '0 16px', background: 'rgba(239,68,68,0.08)',
+    border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8,
+    padding: '9px 12px', color: '#fca5a5', fontSize: 12
+  },
+  launchBtn: {
+    margin: '12px 16px 8px', padding: '13px', borderRadius: 11,
+    background: 'linear-gradient(135deg,#4f7dff,#7c3aed)',
+    border: 'none', color: 'white', fontSize: 14, fontWeight: 700,
+    cursor: 'pointer', display: 'flex', alignItems: 'center',
+    justifyContent: 'center', gap: 10, transition: 'opacity 0.2s'
+  },
+  launchLoading: { opacity: 0.65, cursor: 'not-allowed' },
+  spinner: {
+    width: 15, height: 15, border: '2px solid rgba(255,255,255,0.3)',
+    borderTopColor: 'white', borderRadius: '50%', display: 'inline-block'
+  },
+  footer: {
+    fontSize: 10, color: 'rgba(238,240,250,0.22)', textAlign: 'center',
+    padding: '0 16px 14px'
+  },
 }
