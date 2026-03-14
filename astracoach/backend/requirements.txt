@@ -117,3 +117,4 @@ watchdog==6.0.0
 watchfiles==1.1.1
 websockets==15.0.1
 zipp==3.23.0
+google-auth-oauthlib>=1.2.0

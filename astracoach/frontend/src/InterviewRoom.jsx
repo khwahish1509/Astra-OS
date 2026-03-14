@@ -27,6 +27,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import GeminiAvatar from './components/GeminiAvatar'
+import BrainDashboard from './components/BrainDashboard'
 import { useAudioPipeline } from './hooks/useAudioPipeline'
 import { useInterviewSession } from './hooks/useInterviewSession'
 import { useScreenShareCropper } from './hooks/useScreenShareCropper'
@@ -209,6 +210,7 @@ export default function InterviewRoom({ session, onEnd }) {
   const avatarState = !started ? 'idle' : iv.avatarState
   const showTranscript = iv.transcript.length > 0
   const simliActive = SIMLI_ENABLED && simli.isConnected
+  const isAstraPersona = (config.persona_name || '').toLowerCase().includes('astra')
 
   // ── Sync local audio volume with Simli connection ──────────────
   // When Simli is connected, we use ITS synced audio stream and mute
@@ -302,6 +304,9 @@ export default function InterviewRoom({ session, onEnd }) {
               }}
             />
           )}
+
+          {/* Astra OS Brain Dashboard (top-right corner) */}
+          <BrainDashboard isAstra={isAstraPersona} />
 
           {/* Simli Video Layer */}
           {/* Gemini model badge */}

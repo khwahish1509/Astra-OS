@@ -1,21 +1,23 @@
 """
-AstraAgent — FastAPI Server
-============================
-100% Google-native Universal AI Agent Platform.
-Give it any persona via system prompt — Gemini Live IS the voice.
+Astra OS — The Founder's Operating System
+============================================
+100% Google-native AI Chief of Staff for startup founders.
+Gemini 2.5 Flash Native Audio + ADK + Firestore Vector Search.
 
-Key endpoints:
-  POST /api/session/create     — create agent session (persona_name + system_prompt)
-  GET  /api/session/{id}       — get session state + transcript
+Voice session endpoints (existing):
+  POST /api/session/create     — create voice session
+  WS   /ws/interview/{id}      — bidirectional audio/vision bridge
   POST /api/session/{id}/end   — tear down session
-  WS   /ws/interview/{id}      — THE main audio/vision bridge
-  GET  /health                 — Cloud Run health check
 
-WebSocket protocol (binary + text frames):
-  Binary frames  = raw PCM16 audio (browser → server → Gemini, and back)
-  Text frames    = JSON control messages (both directions)
-
-See gemini_session.py for full message format docs.
+Brain endpoints (new):
+  POST /onboard                — save founder profile
+  GET  /brain/summary          — brain state overview
+  GET  /brain/insights         — list active insights
+  GET  /brain/alerts           — pending alerts
+  POST /brain/scan             — trigger email scan
+  POST /brain/monitor          — trigger risk monitor
+  GET  /auth/gmail             — Gmail OAuth flow
+  GET  /health                 — health check
 """
 
 import asyncio
@@ -39,11 +41,29 @@ from gemini_session import GeminiLiveBridge
 
 load_dotenv()
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+GOOGLE_API_KEY      = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+FIRESTORE_PROJECT   = os.getenv("FIRESTORE_PROJECT_ID", "")
+CREDENTIALS_PATH    = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
+TOKEN_PATH          = os.getenv("GMAIL_TOKEN_PATH", "gmail_token.json")
+FOUNDER_ID          = os.getenv("FOUNDER_ID", "default_founder")
+EMAIL_SCAN_INTERVAL = int(os.getenv("EMAIL_SCAN_INTERVAL_MINUTES", "15"))
+RISK_CHECK_INTERVAL = int(os.getenv("RISK_CHECK_INTERVAL_MINUTES", "30"))
 
 # Avatar generation model — confirmed working high-fidelity image models
 # Standard Imagen 4 model is: imagen-4.0-generate-001
 AVATAR_MODEL = os.getenv("AVATAR_MODEL", "imagen-4.0-generate-001")
+
+# ─────────────────────────────────────────────
+# Astra OS Brain singletons (initialized in lifespan)
+# ─────────────────────────────────────────────
+
+_brain_store = None
+_embeddings  = None
+_gmail       = None
+_calendar    = None
+_email_scanner = None
+_risk_monitor  = None
+_brain_tool_fns = None   # dict of {name: async_fn} from brain_tools.build_tools()
 
 # ─────────────────────────────────────────────
 # App lifecycle
@@ -51,16 +71,72 @@ AVATAR_MODEL = os.getenv("AVATAR_MODEL", "imagen-4.0-generate-001")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 AstraAgent starting...")
-    print(f"   Model: {os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-native-audio-latest')}")
+    global _brain_store, _embeddings, _gmail, _calendar, _email_scanner, _risk_monitor, _brain_tool_fns
+
+    print("🚀 Astra OS starting...")
+    print(f"   Voice Model: {os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-native-audio-latest')}")
+
+    # ── Initialize Company Brain (if Firestore is configured) ──
+    if FIRESTORE_PROJECT and GOOGLE_API_KEY:
+        try:
+            from brain.store import CompanyBrainStore
+            from brain.embeddings import EmbeddingPipeline
+            from integrations.gmail_client import GmailClient
+            from integrations.calendar_client import CalendarClient
+
+            _brain_store = CompanyBrainStore(project_id=FIRESTORE_PROJECT)
+            _embeddings  = EmbeddingPipeline(api_key=GOOGLE_API_KEY)
+            _gmail       = GmailClient(CREDENTIALS_PATH, TOKEN_PATH)
+            _calendar    = CalendarClient(CREDENTIALS_PATH, TOKEN_PATH)
+
+            # Start background agents if Gmail is authenticated
+            from agents.background import EmailScannerAgent, RiskMonitorAgent
+            _email_scanner = EmailScannerAgent(
+                store=_brain_store, embeddings=_embeddings, gmail=_gmail,
+                api_key=GOOGLE_API_KEY, founder_id=FOUNDER_ID,
+                scan_interval_minutes=EMAIL_SCAN_INTERVAL,
+            )
+            _risk_monitor = RiskMonitorAgent(
+                store=_brain_store, api_key=GOOGLE_API_KEY,
+                founder_id=FOUNDER_ID, check_interval_minutes=RISK_CHECK_INTERVAL,
+            )
+
+            # Build brain tools for voice session injection
+            from agents.brain_tools import ToolDeps, build_tools
+            tool_deps = ToolDeps(
+                store=_brain_store, embeddings=_embeddings,
+                gmail=_gmail, calendar=_calendar, founder_id=FOUNDER_ID,
+            )
+            _brain_tool_fns = build_tools(tool_deps)
+            print(f"[Astra OS] 🧠 {len(_brain_tool_fns)} brain tools built for voice session")
+
+            if _gmail.is_authenticated():
+                _email_scanner.start()
+                _risk_monitor.start()
+                print("[Astra OS] ✅ Brain + background agents running")
+            else:
+                print("[Astra OS] ⚠️  Gmail not authenticated — visit /auth/gmail")
+
+        except Exception as e:
+            print(f"[Astra OS] ⚠️  Brain init failed: {e} — voice still works")
+    else:
+        print("[Astra OS] ℹ️  Brain disabled (no FIRESTORE_PROJECT_ID or GOOGLE_API_KEY)")
+
+    print("[Astra OS] ✅ Ready")
     yield
-    print("AstraAgent shutting down.")
+
+    # Shutdown background agents
+    if _email_scanner:
+        await _email_scanner.stop()
+    if _risk_monitor:
+        await _risk_monitor.stop()
+    print("[Astra OS] 🛑 Shut down.")
 
 
 app = FastAPI(
-    title="AstraAgent API",
-    description="Universal AI Agent Platform powered 100% by Google Gemini Live + ADK. Any persona, any purpose.",
-    version="2.0.0",
+    title="Astra OS — The Founder's Operating System",
+    description="AI Chief of Staff: Gemini 2.5 Flash Native Audio + Company Brain + Firestore Vector Search",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -370,6 +446,9 @@ async def interview_websocket(ws: WebSocket, session_id: str):
         ws_send_text=ws.send_text,
         store=store,                      # enables Contextual Recall + post-session summarization
         user_id=session.user_name or "",  # normalised to stable Firestore key inside bridge
+        brain_tools=_brain_tool_fns,      # 22 brain tools for Astra OS voice session
+        brain_store=_brain_store,         # for proactive alerts on session start
+        founder_id=FOUNDER_ID,            # for querying brain state
     )
 
     # Wire up transcript persistence
@@ -490,21 +569,187 @@ async def interview_websocket(ws: WebSocket, session_id: str):
 async def health():
     return {
         "status": "ok",
-        "service": "AstraAgent",
-        "version": "2.0.0",
+        "service": "Astra OS",
+        "version": "3.0.0",
         "active_sessions": store.active_count(),
         "active_bridges": len(active_bridges),
+        "brain_active": _brain_store is not None,
+        "gmail_auth": _gmail.is_authenticated() if _gmail else False,
+        "background_agents": {
+            "email_scanner": _email_scanner._running if _email_scanner else False,
+            "risk_monitor":  _risk_monitor._running if _risk_monitor else False,
+        },
     }
 
 
 @app.get("/api/info")
 async def info():
     return {
-        "service": "AstraAgent — Universal AI Agent Platform",
-        "description": "100% Google: Gemini 2.5 Flash Native Audio + ADK + Cloud Run. Any persona, any purpose.",
+        "service": "Astra OS — The Founder's Operating System",
+        "description": "AI Chief of Staff: Gemini 2.5 Flash Native Audio + Company Brain + Firestore Vector Search",
         "model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-latest"),
         "docs": "/docs",
     }
+
+
+# ─────────────────────────────────────────────
+# Gmail Auth
+# ─────────────────────────────────────────────
+
+@app.get("/auth/gmail")
+async def authenticate_gmail():
+    """Trigger Gmail OAuth flow — opens browser on first run."""
+    if not _gmail:
+        raise HTTPException(503, "Gmail client not initialized")
+    try:
+        await asyncio.to_thread(_gmail._build_service)
+        # Start background agents if they weren't running
+        if _email_scanner and not _email_scanner._running:
+            _email_scanner.start()
+        if _risk_monitor and not _risk_monitor._running:
+            _risk_monitor.start()
+        return {"status": "authenticated", "message": "Gmail connected successfully"}
+    except Exception as e:
+        raise HTTPException(500, f"OAuth flow failed: {e}")
+
+
+@app.get("/auth/status")
+async def auth_status():
+    return {"gmail_authenticated": _gmail.is_authenticated() if _gmail else False}
+
+
+# ─────────────────────────────────────────────
+# Founder Onboarding
+# ─────────────────────────────────────────────
+
+class OnboardRequest(BaseModel):
+    name:            str
+    email:           str
+    company_name:    str
+    company_context: str
+    team_members:    list[dict] = []
+    timezone:        str = "UTC"
+
+
+@app.post("/onboard")
+async def onboard_founder(req: OnboardRequest):
+    """Save or update the founder's profile."""
+    if not _brain_store:
+        raise HTTPException(503, "Brain store not initialized")
+    from brain.models import FounderProfile
+    profile = FounderProfile(
+        founder_id=FOUNDER_ID, name=req.name, email=req.email,
+        company_name=req.company_name, company_context=req.company_context,
+        team_members=req.team_members, timezone=req.timezone,
+    )
+    await _brain_store.save_founder(profile)
+    return {"status": "ok", "founder_id": FOUNDER_ID}
+
+
+@app.get("/founder")
+async def get_founder():
+    if not _brain_store:
+        raise HTTPException(503, "Brain store not initialized")
+    profile = await _brain_store.get_founder(FOUNDER_ID)
+    if not profile:
+        raise HTTPException(404, "Founder profile not found — call /onboard first")
+    return {
+        "founder_id": profile.founder_id, "name": profile.name,
+        "email": profile.email, "company_name": profile.company_name,
+        "team_members": profile.team_members, "timezone": profile.timezone,
+    }
+
+
+# ─────────────────────────────────────────────
+# Brain REST API
+# ─────────────────────────────────────────────
+
+@app.get("/brain/summary")
+async def brain_summary():
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+
+    active, at_risk, tasks, alerts, overdue = await asyncio.gather(
+        _brain_store.get_active_insights(FOUNDER_ID, limit=100),
+        _brain_store.get_at_risk_relationships(FOUNDER_ID, threshold=0.5),
+        _brain_store.get_open_tasks(FOUNDER_ID),
+        _brain_store.get_pending_alerts(FOUNDER_ID),
+        _brain_store.get_overdue_commitments(FOUNDER_ID),
+    )
+    type_counts = {}
+    for i in active:
+        type_counts[i.type.value] = type_counts.get(i.type.value, 0) + 1
+
+    return {
+        "active_insights": len(active), "insight_breakdown": type_counts,
+        "overdue_commitments": len(overdue), "at_risk_contacts": len(at_risk),
+        "open_tasks": len(tasks), "pending_alerts": len(alerts),
+    }
+
+
+@app.get("/brain/insights")
+async def get_insights(type: str | None = None, limit: int = 30):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    from brain.models import InsightType
+    insight_type = None
+    if type:
+        try:
+            insight_type = InsightType(type)
+        except ValueError:
+            raise HTTPException(400, f"Invalid insight type: {type}")
+    insights = await _brain_store.get_active_insights(FOUNDER_ID, insight_type=insight_type, limit=limit)
+    return [{"id": i.id, "type": i.type.value, "content": i.content,
+             "parties": i.parties, "due_date": i.due_date, "source": i.source.value} for i in insights]
+
+
+@app.get("/brain/alerts")
+async def get_alerts(severity: str = "medium"):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    from brain.models import AlertSeverity
+    sev_map = {"low": AlertSeverity.LOW, "medium": AlertSeverity.MEDIUM,
+               "high": AlertSeverity.HIGH, "critical": AlertSeverity.CRITICAL}
+    sev = sev_map.get(severity.lower(), AlertSeverity.MEDIUM)
+    alerts = await _brain_store.get_pending_alerts(FOUNDER_ID, min_severity=sev)
+    return [{"id": a.id, "title": a.title, "message": a.message,
+             "severity": a.severity.value, "related_contact": a.related_contact} for a in alerts]
+
+
+@app.post("/brain/alerts/{alert_id}/dismiss")
+async def dismiss_alert(alert_id: str):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    await _brain_store.dismiss_alert(alert_id)
+    return {"status": "dismissed"}
+
+
+@app.post("/brain/scan")
+async def trigger_scan(hours_back: int = 24):
+    if not _email_scanner:
+        raise HTTPException(503, "Email scanner not initialized")
+    if not (_gmail and _gmail.is_authenticated()):
+        raise HTTPException(401, "Gmail not authenticated — visit /auth/gmail first")
+    n = await _email_scanner.run_once(hours_back=hours_back)
+    return {"insights_extracted": n}
+
+
+@app.post("/brain/monitor")
+async def trigger_monitor():
+    if not _risk_monitor:
+        raise HTTPException(503, "Risk monitor not initialized")
+    n = await _risk_monitor.run_once()
+    return {"alerts_created": n}
+
+
+@app.get("/brain/relationships")
+async def get_relationships():
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    profiles = await _brain_store.get_all_relationships(FOUNDER_ID)
+    return [{"contact_email": p.contact_email, "name": p.name,
+             "health_score": p.health_score, "tone_trend": p.tone_trend.value,
+             "interaction_count": p.interaction_count} for p in profiles]
 
 
 # ─────────────────────────────────────────────

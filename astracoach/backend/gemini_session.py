@@ -116,7 +116,17 @@ spoken response without reading URLs aloud.
 
 Tools available: google_search, evaluate_response, give_live_coaching,
 remember_context, get_structured_plan, analyze_screen_content.
-Use them when genuinely helpful.
+
+Astra OS Brain Tools (if active): search_memory, get_active_commitments,
+get_overdue_commitments, get_active_risks, resolve_insight, dismiss_insight,
+get_relationship_health, get_at_risk_relationships, get_all_relationships,
+get_open_tasks, mark_task_done, mark_task_blocked, get_pending_alerts,
+dismiss_alert, mark_alert_surfaced, get_recent_emails, get_email_thread,
+send_email, reply_to_email, get_upcoming_meetings, get_todays_schedule,
+get_meeting_with_contact, get_company_context, get_brain_summary.
+
+Use tools when genuinely helpful. For Astra persona, ALWAYS call tools
+for real data — never guess at commitments, emails, or relationships.
 
 ─── Screen Share Ambient Awareness (READ CAREFULLY) ─────────────
 You are receiving a 1-frame-per-second JPEG image feed of the user's
@@ -245,8 +255,11 @@ class GeminiLiveBridge:
         session,
         ws_send_bytes,
         ws_send_text,
-        store=None,      # NEW: optional session store for long-term memory
-        user_id: str = None,  # NEW: stable user identifier for cross-session recall
+        store=None,      # optional session store for long-term memory
+        user_id: str = None,  # stable user identifier for cross-session recall
+        brain_tools: dict = None,   # Astra OS brain tools: {name: async_fn}
+        brain_store=None,           # CompanyBrainStore for proactive alerts
+        founder_id: str = None,     # founder ID for brain queries
     ):
         self.api_key  = api_key
         self.session  = session
@@ -255,7 +268,12 @@ class GeminiLiveBridge:
         self._closed     = False
         self._interrupted = False          # gate: when True, block audio forwarding
 
-        # ── Long-Term Memory references (NEW) ──────────────────────────────
+        # ── Astra OS Brain references ─────────────────────────────────────
+        self._brain_tools  = brain_tools or {}
+        self._brain_store  = brain_store
+        self._founder_id   = founder_id
+
+        # ── Long-Term Memory references ───────────────────────────────────
         self._store   = store
         # Derive a stable user_id from the provided value or from the session's user_name
         if user_id:
@@ -353,6 +371,59 @@ class GeminiLiveBridge:
 
         return analyze_screen_content
 
+    # ── Proactive Briefing Builder ────────────────────────────────────────────
+
+    async def _build_greeting(self) -> str:
+        """
+        Build the greeting message for the session.
+
+        For Astra persona: queries the brain for pending alerts, overdue
+        commitments, and at-risk relationships to deliver a proactive briefing.
+        For other personas: simple greeting.
+        """
+        if not self._brain_store or not self._founder_id:
+            return "Please greet the user and ask them what they'd like to discuss today."
+
+        try:
+            alerts, overdue, at_risk = await asyncio.gather(
+                self._brain_store.get_pending_alerts(self._founder_id),
+                self._brain_store.get_overdue_commitments(self._founder_id),
+                self._brain_store.get_at_risk_relationships(self._founder_id, threshold=0.4),
+            )
+
+            briefing_parts = []
+            if overdue:
+                items = ", ".join(i.content[:60] for i in overdue[:3])
+                briefing_parts.append(f"{len(overdue)} overdue commitment(s): {items}")
+            if alerts:
+                items = ", ".join(a.title[:50] for a in alerts[:3])
+                briefing_parts.append(f"{len(alerts)} pending alert(s): {items}")
+            if at_risk:
+                names = ", ".join(p.name or p.contact_email for p in at_risk[:3])
+                briefing_parts.append(f"{len(at_risk)} at-risk relationship(s): {names}")
+
+            if briefing_parts:
+                context = "; ".join(briefing_parts)
+                greeting = (
+                    f"[SYSTEM CONTEXT — proactive briefing data, use this to inform your greeting]\n"
+                    f"Brain state: {context}\n\n"
+                    f"Greet the founder by name, then proactively surface the most critical "
+                    f"items above. Be concise — 3-4 sentences max. Start with an appropriate "
+                    f"time-of-day greeting. End with 'What would you like to tackle first?'"
+                )
+                print(f"[GeminiLive] 🔔 Proactive briefing: {len(overdue)} overdue, "
+                      f"{len(alerts)} alerts, {len(at_risk)} at-risk")
+                return greeting
+            else:
+                return (
+                    "Greet the founder warmly and let them know everything looks clear — "
+                    "no overdue commitments, no critical alerts. Ask what they'd like to work on."
+                )
+
+        except Exception as e:
+            print(f"[GeminiLive] ⚠️  Proactive briefing failed: {e}")
+            return "Please greet the user and ask them what they'd like to discuss today."
+
     # ── Main entry point ──────────────────────────────────────────────────────
 
     async def run(self):
@@ -393,20 +464,29 @@ class GeminiLiveBridge:
 
         # ── Step 2: Build VoiceAgent tools list ──────────────────────────────
         # Use ADK native google_search if available (replaces stub web_search FunctionTool).
-        # The stub web_search just returns a dict — it doesn't actually search. The ADK
-        # native tool hooks into Gemini's server-side grounding API for real results.
         analyze_tool = self._make_analyze_tool()
 
         if GOOGLE_SEARCH_TOOL is not None:
-            # Replace the stub web_search FunctionTool with the native ADK grounding tool
-            # to avoid confusing the model with two "search" tools.
             custom_tools = [t for t in ALL_TOOLS if getattr(getattr(t, 'func', None), '__name__', '') != 'web_search']
             tool_list = [GOOGLE_SEARCH_TOOL, *custom_tools, analyze_tool]
             print(f"[GeminiLive] 🔍 google_search grounding tool active (replaced stub web_search)")
         else:
-            # Fallback: use all original tools including stub web_search
             tool_list = [*ALL_TOOLS, analyze_tool]
             print(f"[GeminiLive] 🔍 Using custom web_search FunctionTool (ADK google_search unavailable)")
+
+        # ── Step 2b: Inject Astra OS brain tools into voice session ────────
+        # These 22 tools let the voice agent query the Company Brain, read
+        # emails, check calendar, manage tasks/alerts — all via voice.
+        from google.adk.tools.function_tool import FunctionTool as ADKFunctionTool
+        if self._brain_tools:
+            brain_tool_objects = []
+            for name, fn in self._brain_tools.items():
+                try:
+                    brain_tool_objects.append(ADKFunctionTool(func=fn))
+                except Exception as e:
+                    print(f"[GeminiLive] ⚠️  Could not wrap brain tool '{name}': {e}")
+            tool_list.extend(brain_tool_objects)
+            print(f"[GeminiLive] 🧠 {len(brain_tool_objects)} brain tools injected into voice session")
 
         # ── Step 3: Build VoiceAgent ──────────────────────────────────────────
         #    NOTE: No sub_agents here. Sub-agents require bidi-capable models for ALL agents
@@ -471,14 +551,13 @@ class GeminiLiveBridge:
         await self._notify({"type": "ready"})
         await self._notify({"type": "status", "state": "listening"})
 
-        # ── Step 8: Kickstart the agent's first response with a greeting ──────
+        # ── Step 8: Kickstart — proactive briefing for Astra, simple greeting for others
+        greeting_text = await self._build_greeting()
         try:
             self._q.send_content(
                 types.Content(
                     role="user",
-                    parts=[types.Part.from_text(
-                        text="Please greet the user and ask them what they'd like to discuss today."
-                    )]
+                    parts=[types.Part.from_text(text=greeting_text)]
                 )
             )
         except Exception as e:
@@ -634,26 +713,33 @@ class GeminiLiveBridge:
                     calls = event.get_function_calls()
                     if calls:
                         await self._notify({"type": "status", "state": "thinking"})
+                        # Map brain tool names to user-friendly labels
+                        _TOOL_LABELS = {
+                            "analyze_screen_content": "🔍 analyzing screen…",
+                            "google_search": "🌐 searching the web…",
+                            "search_memory": "🧠 searching brain…",
+                            "get_brain_summary": "🧠 checking brain…",
+                            "get_active_commitments": "📋 checking commitments…",
+                            "get_overdue_commitments": "⚠️ checking overdue…",
+                            "get_active_risks": "🚨 checking risks…",
+                            "get_relationship_health": "💚 checking relationship…",
+                            "get_at_risk_relationships": "💔 checking relationships…",
+                            "get_recent_emails": "📧 reading emails…",
+                            "get_email_thread": "📧 reading thread…",
+                            "send_email": "✉️ sending email…",
+                            "reply_to_email": "↩️ replying to email…",
+                            "get_upcoming_meetings": "📅 checking calendar…",
+                            "get_todays_schedule": "📅 checking today…",
+                            "get_open_tasks": "✅ checking tasks…",
+                            "get_pending_alerts": "🔔 checking alerts…",
+                        }
                         for fc in calls:
-                            tool_name = fc.name
-                            if tool_name == "analyze_screen_content":
-                                await self._notify({
-                                    "type": "tool_call",
-                                    "name": "🔍 analyzing screen…",
-                                    "status": "running",
-                                })
-                            elif tool_name == "google_search":
-                                await self._notify({
-                                    "type": "tool_call",
-                                    "name": "🌐 searching the web…",
-                                    "status": "running",
-                                })
-                            else:
-                                await self._notify({
-                                    "type": "tool_call",
-                                    "name": tool_name,
-                                    "status": "running",
-                                })
+                            label = _TOOL_LABELS.get(fc.name, fc.name)
+                            await self._notify({
+                                "type": "tool_call",
+                                "name": label,
+                                "status": "running",
+                            })
 
         except Exception as e:
             print(f"[downstream_task] Error: {e}")
