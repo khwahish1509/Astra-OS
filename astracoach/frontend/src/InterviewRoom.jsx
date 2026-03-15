@@ -536,16 +536,23 @@ export default function InterviewRoom({ session, onEnd }) {
             </div>
           </div>
 
-          {/* Session tips */}
+          {/* Session tips — context-aware for Astra */}
           <div style={S.tipsCard} className="glass">
-            <div style={S.tipsTitle}>💡 Session Tips</div>
+            <div style={S.tipsTitle}>{isAstraPersona ? '⚡ Voice Commands' : '💡 Session Tips'}</div>
             <div style={S.tipsList}>
-              {[
+              {(isAstraPersona ? [
+                '"Brief me" — get a full status update',
+                '"Check my emails" — scan recent inbox',
+                '"How\'s my relationship with [name]?"',
+                '"What\'s on my calendar today?"',
+                '"Send an email to [name] about [topic]"',
+                '"What commitments am I behind on?"',
+              ] : [
                 'Speak naturally — Gemini understands context',
                 'Interrupt anytime — barge-in is fully supported',
                 'Look at the camera for best vision context',
                 'Ask the agent to use a tool anytime',
-              ].map((t, i) => (
+              ]).map((t, i) => (
                 <div key={i} style={S.tip}>{t}</div>
               ))}
             </div>
@@ -589,8 +596,8 @@ const S = {
   root: {
     width: '100dvw', height: '100dvh',
     display: 'flex', flexDirection: 'column',
-    background: '#f3f4f6', // Light grey base
-    color: '#111827', // Dark charcoal text
+    background: '#07070f', // Very dark base
+    color: '#eef0fa', // Light text
     fontFamily: '"Inter", "Outfit", sans-serif',
     overflow: 'hidden',
   },
@@ -599,11 +606,12 @@ const S = {
   topBar: {
     height: '72px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '0 32px',
-    background: 'rgba(255, 255, 255, 0.8)',
-    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-    borderBottom: '1px solid #e5e7eb',
+    background: 'rgba(14, 14, 26, 0.4)', // Glassmorphic dark
+    boxShadow: '0 4px 30px rgba(0,0,0,0.2)',
+    borderBottom: '1px solid rgba(255,255,255,0.07)',
     zIndex: 1000,
-    backdropFilter: 'blur(12px)',
+    backdropFilter: 'blur(24px)',
+    WebkitBackdropFilter: 'blur(24px)',
   },
   topLeft: { display: 'flex', alignItems: 'center', gap: 10 },
   topRight: { display: 'flex', alignItems: 'center', gap: 8 },
@@ -614,48 +622,52 @@ const S = {
   brand: {
     fontSize: '18px', fontWeight: 700,
     letterSpacing: '-0.02em',
-    color: '#111827',
+    color: '#eef0fa', // Light text
   },
   badge: {
-    background: '#eff6ff',
-    color: '#2563eb',
+    background: 'rgba(79,125,255,0.12)', // accent-soft
+    color: '#4f7dff',
     padding: '4px 10px', borderRadius: '6px',
     fontSize: '12px', fontWeight: 600,
+    border: '1px solid rgba(79,125,255,0.2)'
   },
   voiceBadge: {
-    background: '#f0fdf4',
-    color: '#16a34a',
+    background: 'rgba(34,197,94,0.12)',
+    color: '#22c55e',
     padding: '4px 10px', borderRadius: '6px',
     fontSize: '12px', fontWeight: 600,
+    border: '1px solid rgba(34,197,94,0.2)'
   },
   timer: {
     fontSize: '24px', fontWeight: 600, fontFamily: 'monospace',
-    color: '#111827',
+    color: '#eef0fa', // Light
   },
   iconBtn: {
-    width: 34, height: 34, borderRadius: 8, border: '1px solid #e5e7eb',
-    color: '#4b5563', cursor: 'pointer', fontSize: 15,
+    width: 34, height: 34, borderRadius: 8, border: '1px solid rgba(255,255,255,0.07)',
+    color: 'rgba(238,240,250,0.7)', cursor: 'pointer', fontSize: 15,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: '#ffffff',
-    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+    background: 'rgba(255,255,255,0.03)',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+    transition: 'all 0.2s',
   },
   endBtn: {
     padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-    background: '#fee2e2', border: '1px solid #fca5a5',
-    color: '#dc2626', cursor: 'pointer',
+    background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
+    color: '#ef4444', cursor: 'pointer',
+    transition: 'all 0.2s hover:background:rgba(239,68,68,0.25)',
   },
 
   // ── Screen share button ────────────────────────────────────────────────────
   screenShareBtn: {
     padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-    background: '#e0f2fe', border: '1px solid #93c5fd',
-    color: '#2563eb', cursor: 'pointer',
+    background: 'rgba(79,125,255,0.15)', border: '1px solid rgba(79,125,255,0.4)',
+    color: '#4f7dff', cursor: 'pointer',
     display: 'flex', alignItems: 'center', gap: 5,
     transition: 'all 0.2s',
   },
   screenShareBtnActive: {
-    background: '#dcfce7', border: '1px solid #86efac',
-    color: '#16a34a',
+    background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
+    color: '#22c55e',
     animation: 'dotPulse 1.5s ease-in-out infinite',
   },
 
@@ -665,35 +677,38 @@ const S = {
     top: 52, left: '50%', transform: 'translateX(-50%)',
     display: 'flex', alignItems: 'center', gap: 6,
     fontSize: 11, fontWeight: 600,
-    color: '#16a34a',
-    background: '#dcfce7',
-    border: '1px solid #86efac',
+    color: '#22c55e',
+    background: 'rgba(34,197,94,0.15)',
+    border: '1px solid rgba(34,197,94,0.4)',
     padding: '4px 14px', borderRadius: 20,
     pointerEvents: 'none',
     zIndex: 9999,
     whiteSpace: 'nowrap',
     letterSpacing: '0.03em',
+    backdropFilter: 'blur(12px)',
   },
   ambientDot: {
     width: 6, height: 6, borderRadius: '50%',
     background: '#22c55e', display: 'inline-block',
     animation: 'dotPulse 1.5s ease-in-out infinite',
     flexShrink: 0,
+    boxShadow: '0 0 8px #22c55e',
   },
 
   // ── Screen share error toast ───────────────────────────────────────────────
   shareErrToast: {
     position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-    background: '#fee2e2', border: '1px solid #fca5a5',
-    color: '#dc2626', fontSize: 12, padding: '8px 16px', borderRadius: 10,
+    background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
+    color: '#ef4444', fontSize: 12, padding: '8px 16px', borderRadius: 10,
     zIndex: 9998,
+    backdropFilter: 'blur(12px)',
   },
 
   // ── Stage ─────────────────────────────────────────────────────────────────
   stage: {
     flex: 1, position: 'relative',
     display: 'flex', gap: '32px', padding: '32px',
-    background: '#f9fafb', // Clean white-grey
+    background: 'transparent', // The root background handles the dark theme
     overflow: 'hidden',
   },
 
@@ -702,31 +717,35 @@ const S = {
     position: 'relative', flex: 1,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center',
-    background: '#ffffff', // White background for avatar
-    borderRadius: '16px',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+    background: 'rgba(14, 14, 26, 0.4)', // Dark glass
+    borderRadius: '24px',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+    border: '1px solid rgba(255,255,255,0.05)',
+    backdropFilter: 'blur(24px)',
     overflow: 'hidden',
   },
   backdropLayer: {
     position: 'absolute', inset: 0,
     backgroundSize: 'cover',
     backgroundPosition: 'center',
-    filter: 'blur(80px) brightness(0.9) saturate(1.1)', // Adjusted for light mode
-    opacity: 0.7,
+    filter: 'blur(80px) brightness(0.6) saturate(1.1)', // Adjusted for dark mode
+    opacity: 0.5,
     zIndex: -1,
     transform: 'scale(1.2)',
   },
   gemBadge: {
     position: 'absolute', top: 14, left: 14,
     display: 'flex', alignItems: 'center', gap: 6,
-    fontSize: 11, color: '#4b5563', // Darker text
-    background: '#f3f4f6', // Light grey background
+    fontSize: 11, color: 'rgba(238,240,250,0.7)',
+    background: 'rgba(255,255,255,0.05)',
     padding: '4px 10px',
-    borderRadius: 20, border: '1px solid #e5e7eb', // Lighter border
+    borderRadius: 20, border: '1px solid rgba(255,255,255,0.07)',
+    backdropFilter: 'blur(12px)',
   },
   gemDot: {
     width: 6, height: 6, borderRadius: '50%', background: '#4f7dff',
     display: 'inline-block', animation: 'dotPulse 2s ease-in-out infinite',
+    boxShadow: '0 0 8px #4f7dff',
   },
   avatarCenter: {
     width: '100%', height: '100%',
@@ -756,20 +775,20 @@ const S = {
   },
   simliLoading: {
     display: 'flex', alignItems: 'center', gap: 10,
-    color: '#2563eb', // Darker blue text
-    background: '#e0f2fe', // Light blue background
-    border: '1px solid #93c5fd', // Blue border
+    color: '#eef0fa', // Light text
+    background: 'rgba(79,125,255,0.15)', // Glass dark blue
+    border: '1px solid rgba(79,125,255,0.4)',
     padding: '10px 20px', borderRadius: 12,
   },
   simliLoadSpinner: {
     width: 16, height: 16, borderRadius: '50%',
-    border: '2px solid #93c5fd', // Blue border
-    borderTopColor: '#2563eb', // Darker blue spinner
+    border: '2px solid rgba(79,125,255,0.4)',
+    borderTopColor: '#4f7dff',
   },
   simliErrPill: {
-    fontSize: 11, color: '#f97316', // Darker orange text
-    background: '#fff7ed', // Light orange background
-    border: '1px solid #fed7aa', // Orange border
+    fontSize: 11, color: '#f59e0b',
+    background: 'rgba(245,158,11,0.15)',
+    border: '1px solid rgba(245,158,11,0.4)',
     padding: '4px 12px', borderRadius: 20,
   },
 
@@ -779,129 +798,134 @@ const S = {
     marginTop: -4,
   },
   nameText: {
-    color: '#111827', fontSize: 16, fontWeight: 700, letterSpacing: '-0.2px', // Dark text
+    color: '#eef0fa', fontSize: 16, fontWeight: 700, letterSpacing: '-0.2px', // Light text
   },
 
   toolPill: {
     display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
-    color: '#7e22ce', background: '#f3e8ff', // Darker purple text, light purple background
-    padding: '5px 12px', borderRadius: 20, border: '1px solid #d8b4fe', // Purple border
+    color: '#a855f7', background: 'rgba(168,85,247,0.15)', // Purple glow
+    padding: '5px 12px', borderRadius: 20, border: '1px solid rgba(168,85,247,0.4)',
   },
   toolSpin: { display: 'inline-block', fontSize: 14 },
   errPill: {
-    fontSize: 12, color: '#dc2626', background: '#fee2e2', // Darker red text, light red background
-    padding: '5px 12px', borderRadius: 20, border: '1px solid #fca5a5', // Red border
+    fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.15)',
+    padding: '5px 12px', borderRadius: 20, border: '1px solid rgba(239,68,68,0.4)',
   },
 
   // Start overlay
   startOverlay: {
     position: 'absolute', inset: 0,
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: 14, background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(10px)', // Light background
+    gap: 14, background: 'rgba(14, 14, 26, 0.7)', backdropFilter: 'blur(16px)', // Dark glass
     zIndex: 10,
   },
   startPersonaLabel: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 },
   startPersonaName: {
-    fontSize: 13, fontWeight: 600, color: '#2563eb', // Darker blue text
-    background: '#e0f2fe', // Light blue background
+    fontSize: 13, fontWeight: 600, color: '#4f7dff',
+    background: 'rgba(79,125,255,0.15)',
     padding: '3px 12px', borderRadius: 20,
-    border: '1px solid #93c5fd', // Blue border
+    border: '1px solid rgba(79,125,255,0.4)',
   },
   startBtn: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
     padding: '18px 40px', borderRadius: 14, cursor: 'pointer', fontSize: 15, fontWeight: 600,
-    background: 'linear-gradient(135deg, #e0f2fe, #f3e8ff)', // Light gradient
-    border: '1px solid #93c5fd', // Blue border
-    color: '#111827', // Dark text
+    background: 'linear-gradient(135deg, rgba(79,125,255,0.2), rgba(168,85,247,0.2))',
+    border: '1px solid rgba(255,255,255,0.1)',
+    color: '#eef0fa', // Light text
     transition: 'all 0.2s',
+    boxShadow: '0 4px 20px rgba(79,125,255,0.15)',
   },
-  micErr: { fontSize: 11, color: '#dc2626', marginTop: 4 }, // Darker red
+  micErr: { fontSize: 11, color: '#ef4444', marginTop: 4 }, // Red
   startNote: {
-    fontSize: 11, color: '#4b5563', textAlign: 'center', lineHeight: 1.6, // Darker text
+    fontSize: 11, color: 'rgba(238,240,250,0.5)', textAlign: 'center', lineHeight: 1.6, // Dim text
   },
 
   // Status strip at bottom of avatar pane
   statusStrip: {
     position: 'absolute', bottom: 16,
     display: 'flex', alignItems: 'center', gap: 8,
+    background: 'rgba(0,0,0,0.2)', padding: '6px 12px', borderRadius: '16px', backdropFilter: 'blur(8px)',
   },
   statusDot: {
     width: 8, height: 8, borderRadius: '50%',
     transition: 'background 0.3s ease, box-shadow 0.3s ease',
   },
-  statusTxt: { fontSize: 12, color: '#4b5563' }, // Darker text
+  statusTxt: { fontSize: 12, color: 'rgba(238,240,250,0.7)' },
   mutedBadge: {
-    fontSize: 11, color: '#dc2626', background: '#fee2e2', // Darker red text, light red background
-    padding: '2px 8px', borderRadius: 8,
+    fontSize: 11, color: '#ef4444', background: 'rgba(239,68,68,0.15)',
+    padding: '2px 8px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)',
   },
 
   // ── Right pane ────────────────────────────────────────────────────────────
   rightPane: {
     width: 320, display: 'flex', flexDirection: 'column',
     gap: 12, overflow: 'hidden', zIndex: 10,
-    pointerEvents: 'auto', // Allow clicks through to avatar? No, cards need pointers.
+    pointerEvents: 'auto',
   },
   camCard: {
-    borderRadius: 14, overflow: 'hidden', flexShrink: 0,
-    background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(12px)', // Light background
-    border: '1px solid #e5e7eb', pointerEvents: 'auto', // Light border
-    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+    borderRadius: 16, overflow: 'hidden', flexShrink: 0,
+    background: 'rgba(14, 14, 26, 0.4)', backdropFilter: 'blur(24px)', // Dark glass
+    border: '1px solid rgba(255,255,255,0.05)', pointerEvents: 'auto',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
   },
   camHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '8px 12px',
-    borderBottom: '1px solid #e5e7eb', // Light border
+    padding: '10px 14px',
+    borderBottom: '1px solid rgba(255,255,255,0.05)',
   },
-  camLabel: { fontSize: 12, fontWeight: 600, color: '#111827' }, // Dark text
+  camLabel: { fontSize: 12, fontWeight: 600, color: '#eef0fa' },
   camLive: {
     display: 'flex', alignItems: 'center', gap: 5,
-    fontSize: 11, color: '#16a34a', fontWeight: 600, // Darker green
+    fontSize: 11, color: '#22c55e', fontWeight: 600,
   },
   camLiveDot: {
     width: 6, height: 6, borderRadius: '50%', background: '#22c55e',
     display: 'inline-block', animation: 'dotPulse 1.5s ease-in-out infinite',
+    boxShadow: '0 0 6px #22c55e',
   },
-  camBox: { position: 'relative', height: 200, background: '#e5e7eb' }, // Light grey background
+  camBox: { position: 'relative', height: 200, background: '#07070f' },
   video: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
   noCamera: {
     position: 'absolute', inset: 0,
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: 8, fontSize: 28, color: '#9ca3af', // Darker grey
+    gap: 8, fontSize: 28, color: 'rgba(238,240,250,0.3)',
   },
   noCamTxt: { fontSize: 12 },
 
   // Transcript
   transcriptCard: {
-    borderRadius: 14, overflow: 'hidden',
-    background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(12px)', // Light background
-    border: '1px solid #e5e7eb', flex: 1, display: 'flex', flexDirection: 'column', // Light border
+    borderRadius: 16, overflow: 'hidden',
+    background: 'rgba(14, 14, 26, 0.4)', backdropFilter: 'blur(24px)',
+    border: '1px solid rgba(255,255,255,0.05)', flex: 1, display: 'flex', flexDirection: 'column',
     pointerEvents: 'auto',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
   },
   transcriptHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '8px 12px', fontSize: 12, fontWeight: 600, color: '#111827', // Dark text
-    borderBottom: '1px solid #e5e7eb', flexShrink: 0, // Light border
+    padding: '10px 14px', fontSize: 12, fontWeight: 600, color: '#eef0fa',
+    borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0,
   },
   transcriptCount: {
-    fontSize: 10, color: '#4b5563', // Darker text
-    background: '#f3f4f6', padding: '2px 8px', borderRadius: 10, // Light background
+    fontSize: 10, color: 'rgba(238,240,250,0.7)',
+    background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: 10,
   },
-  transcriptBody: { overflowY: 'auto', flex: 1, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 },
-  transcriptEmpty: { fontSize: 11, color: '#9ca3af', textAlign: 'center', padding: '20px 0' }, // Darker grey
-  transcriptEntry: { display: 'flex', flexDirection: 'column', gap: 2, padding: '6px 10px', borderRadius: 8 },
-  modelEntry: { background: '#e0f2fe', border: '1px solid #93c5fd' }, // Light blue
-  userEntry: { background: '#dcfce7', border: '1px solid #86efac' }, // Light green
+  transcriptBody: { overflowY: 'auto', flex: 1, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 },
+  transcriptEmpty: { fontSize: 11, color: 'rgba(238,240,250,0.3)', textAlign: 'center', padding: '20px 0' },
+  transcriptEntry: { display: 'flex', flexDirection: 'column', gap: 4, padding: '8px 12px', borderRadius: 10 },
+  modelEntry: { background: 'rgba(79,125,255,0.1)', border: '1px solid rgba(79,125,255,0.2)' },
+  userEntry: { background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)' },
   tRole: { fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' },
-  tText: { fontSize: 12, color: '#111827', lineHeight: 1.5 }, // Dark text
+  tText: { fontSize: 13, color: '#eef0fa', lineHeight: 1.5 },
 
   // Tips
   tipsCard: {
-    borderRadius: 14, padding: '10px 12px', flexShrink: 0,
-    border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 16, padding: '12px 14px', flexShrink: 0,
+    background: 'rgba(14, 14, 26, 0.4)', backdropFilter: 'blur(24px)',
+    border: '1px solid rgba(255,255,255,0.05)',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
     pointerEvents: 'auto',
   },
-  tipsTitle: { fontSize: 11, fontWeight: 700, color: 'rgba(238,240,250,0.5)', marginBottom: 6, letterSpacing: '0.04em' },
-  tipsList: { display: 'flex', flexDirection: 'column', gap: 4 },
-  tip: { fontSize: 11, color: 'rgba(238,240,250,0.4)', lineHeight: 1.4 },
+  tipsTitle: { fontSize: 11, fontWeight: 700, color: 'rgba(238,240,250,0.7)', marginBottom: 10, letterSpacing: '0.04em' },
+  tipsList: { display: 'flex', flexDirection: 'column', gap: 6 },
+  tip: { fontSize: 11, color: 'rgba(238,240,250,0.5)', lineHeight: 1.4 },
 }

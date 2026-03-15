@@ -45,6 +45,7 @@ Audio format contract:
 import asyncio
 import json
 import os
+import re
 import uuid
 
 from google.genai import types
@@ -53,6 +54,7 @@ from google.adk import Runner
 from google.adk.agents import LlmAgent, LiveRequestQueue, RunConfig
 from google.adk.agents.run_config import StreamingMode
 from google.adk.sessions import InMemorySessionService
+from google.adk.sessions import DatabaseSessionService
 from agent_tools import ALL_TOOLS
 
 from session_store import summarize_and_persist
@@ -93,87 +95,43 @@ except ImportError:
 
 UNIVERSAL_VOICE_SUFFIX = """
 
-─── Live Session Rules (always follow, regardless of persona) ───
-Conversation style:
-- Speak conversationally — no markdown, no bullet points in speech
-- Keep responses concise (under 70 words) for natural real-time pacing
-- Handle interruptions gracefully — acknowledge and continue
-- You are always in character — never break the fourth wall
+─── VOICE DELIVERY RULES (non-negotiable) ───
+- Speak like a human in a real conversation. No bullet points. No markdown. No lists.
+- Maximum 4 sentences per turn. If you need more, pause and ask "want me to continue?"
+- Handle interruptions gracefully — stop immediately, acknowledge, pivot
+- Never say "certainly", "absolutely", "great question", "I'd be happy to"
+- Never narrate your own actions. Don't say "I'm going to search for..." — just do it
+- When calling a tool, say ONE short phrase ("Let me check." / "Pulling that up." / "One sec.") then go silent until the tool returns
+- After a tool returns, synthesize the result naturally. Don't read raw data aloud — interpret it
+- Stay in character. Always.
 
-─── MANDATORY: Google Search Grounding for Factual Questions ────
-You have access to the google_search tool (or web_search as fallback).
-You MUST use it whenever the user asks about:
-  • A specific company, product, or service (e.g. "What does Stripe do?")
-  • Current events, recent news, or market trends
-  • Real-world facts that could have changed recently
-  • Any question where hallucinating facts would be harmful
+─── TOOL EXECUTION RULES ───
+Google Search: Use for any factual question about companies, people, market trends, current events. Don't say "let me search" — say "let me check that" then call google_search.
 
-DO NOT rely on your training data alone for these queries.
-Say: "Let me check that for you." — then call google_search immediately.
-After the search returns, weave the grounded facts naturally into your
-spoken response without reading URLs aloud.
-─────────────────────────────────────────────────────────────────
+Astra Brain Tools (when active):
+  Memory: search_memory, get_active_commitments, get_overdue_commitments, get_active_risks, resolve_insight, dismiss_insight
+  People: get_relationship_health, get_at_risk_relationships, get_all_relationships
+  Tasks: get_open_tasks, mark_task_done, mark_task_blocked
+  Alerts: get_pending_alerts, dismiss_alert, mark_alert_surfaced
+  Email: get_recent_emails, get_email_thread, send_email, reply_to_email, search_emails, get_emails_from_sender, get_unread_email_count
+  Calendar: get_upcoming_meetings, get_todays_schedule, get_meeting_with_contact, create_calendar_event, quick_schedule
+  Drive: search_drive, list_recent_drive_files, search_drive_by_type, get_drive_file_info, create_google_doc
+  Google Tasks: list_google_tasks, create_google_task, complete_google_task, get_google_task_lists
+  Contacts: search_contacts, get_contact_info, list_all_contacts
+  Long-Term Memory: recall_memory (search past conversations), save_memory_note (remember facts), get_past_conversations (episode history), get_known_facts (all stored facts)
+  Context: get_company_context, get_brain_summary
 
-Tools available: google_search, evaluate_response, give_live_coaching,
-remember_context, get_structured_plan, analyze_screen_content.
+General: evaluate_response, give_live_coaching, remember_context, get_structured_plan, analyze_screen_content
 
-Astra OS Brain Tools (if active): search_memory, get_active_commitments,
-get_overdue_commitments, get_active_risks, resolve_insight, dismiss_insight,
-get_relationship_health, get_at_risk_relationships, get_all_relationships,
-get_open_tasks, mark_task_done, mark_task_blocked, get_pending_alerts,
-dismiss_alert, mark_alert_surfaced, get_recent_emails, get_email_thread,
-send_email, reply_to_email, get_upcoming_meetings, get_todays_schedule,
-get_meeting_with_contact, get_company_context, get_brain_summary.
+CRITICAL: For Astra persona — ALWAYS call tools for real data. NEVER guess at names, dates, commitments, or relationship status. If you don't have data, say "I don't have that in the brain yet" rather than fabricating.
 
-Use tools when genuinely helpful. For Astra persona, ALWAYS call tools
-for real data — never guess at commitments, emails, or relationships.
-
-─── Screen Share Ambient Awareness (READ CAREFULLY) ─────────────
-You are receiving a 1-frame-per-second JPEG image feed of the user's
-ENTIRE computer desktop, squished into 768×768 pixels.
-
-WHAT THIS MEANS FOR YOU:
-- You have ambient awareness of which applications the user has open
-  (e.g., VS Code, browser, terminal, document editor, Figma, etc.)
-- You can detect the GENERAL LAYOUT of their screen — multiple windows,
-  which app is in focus, whether they are coding, browsing, or writing
-- You CANNOT reliably read fine text (code lines, error messages,
-  terminal output) because the squish-to-768 makes it blurry.
-  Do NOT guess at specific text content — you will make errors.
-
-RULE 1 — SILENCE BY DEFAULT:
-Process every frame silently in the background. Do NOT narrate the
-screen constantly. Do not say "I can see you're in VS Code" unless
-directly asked.
-
-RULE 2 — RESPOND WHEN DIRECTLY ASKED:
-If the user asks "What am I doing?", "What do you see?", or
-"What app am I in?" — give a brief, accurate description of the
-general desktop layout (which apps appear open, what seems active).
-Keep it to 1–2 sentences. Example:
-  "It looks like you have VS Code open with what seems like a Python
-   project, and a browser tab in the background."
-
-RULE 3 — USE analyze_screen_content FOR FINE TEXT:
-You MUST call the analyze_screen_content tool when:
-  • The user says "read this code" / "can you see this?" / "debug this"
-  • The user asks about a specific line, error, or piece of text
-  • The user says "what does this say?" about something on screen
-  • The user asks you to review, analyse, or explain visible content
-
-When calling the tool, say briefly: "Let me zoom in and read that."
-Pass the user's exact question as the argument. After it returns,
-summarise the findings conversationally in under 80 words.
-
-RULE 4 — CAMERA FRAMES vs SCREEN FRAMES:
-You also receive occasional camera frames (user's face/environment).
-These are separate from screen share frames. Camera frames help you
-read documents the user holds up; screen frames are the desktop feed.
-
-RULE 5 — DO NOT FABRICATE TEXT:
-Never guess or fabricate what text says on screen. If you are not
-sure, say "I can see you're working on something but I can't make out
-the fine details — want me to zoom in and read it?"
+─── SCREEN SHARE (when active) ───
+You receive 1-FPS desktop screenshots (768x768). Rules:
+1. Process silently. Never narrate what you see unprompted
+2. If asked "what do you see?" — describe apps/layout in 1-2 sentences
+3. For fine text (code, errors, documents) — call analyze_screen_content. Say "Let me zoom in." then wait for the result
+4. Camera frames are separate from screen frames
+5. NEVER fabricate text you can't read. Say "I can't make that out — want me to zoom in?"
 ─────────────────────────────────────────────────────────────────
 """
 
@@ -223,10 +181,6 @@ def _normalise_user_id(raw: str) -> str:
     return re.sub(r"[^a-z0-9_]", "_", raw.strip().lower())
 
 
-# Import re here (used by _normalise_user_id above and summarize_and_persist)
-import re
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # GeminiLiveBridge
 # ──────────────────────────────────────────────────────────────────────────────
@@ -260,6 +214,7 @@ class GeminiLiveBridge:
         brain_tools: dict = None,   # Astra OS brain tools: {name: async_fn}
         brain_store=None,           # CompanyBrainStore for proactive alerts
         founder_id: str = None,     # founder ID for brain queries
+        memory_service=None,        # ADK BaseMemoryService for long-term memory
     ):
         self.api_key  = api_key
         self.session  = session
@@ -272,6 +227,9 @@ class GeminiLiveBridge:
         self._brain_tools  = brain_tools or {}
         self._brain_store  = brain_store
         self._founder_id   = founder_id
+
+        # ── Memory Service (ADK-native long-term memory) ──────────────────
+        self._memory_service = memory_service
 
         # ── Long-Term Memory references ───────────────────────────────────
         self._store   = store
@@ -378,46 +336,109 @@ class GeminiLiveBridge:
         Build the greeting message for the session.
 
         For Astra persona: queries the brain for pending alerts, overdue
-        commitments, and at-risk relationships to deliver a proactive briefing.
+        commitments, at-risk relationships, today's calendar, and unread
+        emails to deliver a sharp executive briefing on session start.
+        Preloading this data eliminates tool calls for common opening questions.
         For other personas: simple greeting.
         """
         if not self._brain_store or not self._founder_id:
             return "Please greet the user and ask them what they'd like to discuss today."
 
         try:
-            alerts, overdue, at_risk = await asyncio.gather(
+            # Parallel fetch all briefing data — saves ~2s vs sequential calls
+            fetch_tasks = [
                 self._brain_store.get_pending_alerts(self._founder_id),
                 self._brain_store.get_overdue_commitments(self._founder_id),
                 self._brain_store.get_at_risk_relationships(self._founder_id, threshold=0.4),
-            )
+                self._brain_store.get_open_tasks(self._founder_id),
+            ]
 
-            briefing_parts = []
+            # Also preload calendar and email data (these are the most commonly
+            # asked about in the first turn — preloading avoids an extra tool call)
+            _calendar = self._brain_tools.get("get_todays_schedule")
+            _unread = self._brain_tools.get("get_unread_email_count")
+            if _calendar:
+                fetch_tasks.append(_calendar())
+            if _unread:
+                fetch_tasks.append(_unread())
+
+            results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+            alerts  = results[0] if not isinstance(results[0], Exception) else []
+            overdue = results[1] if not isinstance(results[1], Exception) else []
+            at_risk = results[2] if not isinstance(results[2], Exception) else []
+            tasks   = results[3] if not isinstance(results[3], Exception) else []
+
+            # Calendar + email are optional preloads
+            today_schedule = results[4] if len(results) > 4 and not isinstance(results[4], Exception) else []
+            unread_data    = results[5] if len(results) > 5 and not isinstance(results[5], Exception) else {}
+
+            # Build structured briefing data
+            briefing_data = []
+
             if overdue:
-                items = ", ".join(i.content[:60] for i in overdue[:3])
-                briefing_parts.append(f"{len(overdue)} overdue commitment(s): {items}")
-            if alerts:
-                items = ", ".join(a.title[:50] for a in alerts[:3])
-                briefing_parts.append(f"{len(alerts)} pending alert(s): {items}")
-            if at_risk:
-                names = ", ".join(p.name or p.contact_email for p in at_risk[:3])
-                briefing_parts.append(f"{len(at_risk)} at-risk relationship(s): {names}")
+                for c in overdue[:3]:
+                    parties = ", ".join(c.parties[:2]) if c.parties else "unknown"
+                    briefing_data.append(f"OVERDUE: \"{c.content[:80]}\" (with {parties}, due {c.due_date or 'no date'})")
 
-            if briefing_parts:
-                context = "; ".join(briefing_parts)
+            if alerts:
+                for a in alerts[:3]:
+                    briefing_data.append(f"ALERT [{a.severity.value.upper()}]: {a.title} — {(a.message or '')[:60]}")
+
+            if at_risk:
+                for r in at_risk[:3]:
+                    name = r.name or r.contact_email
+                    briefing_data.append(f"AT-RISK RELATIONSHIP: {name} (health: {int(r.health_score*100)}%, tone: {r.tone_trend.value})")
+
+            total_issues = len(overdue) + len(alerts) + len(at_risk)
+            open_task_count = len(tasks)
+
+            # Preloaded context block — saves the agent from needing tool calls
+            preloaded = []
+            if today_schedule:
+                event_summaries = []
+                for ev in (today_schedule[:5] if isinstance(today_schedule, list) else []):
+                    title = ev.get("title", "Untitled") if isinstance(ev, dict) else str(ev)
+                    start = ev.get("start_time", "") if isinstance(ev, dict) else ""
+                    event_summaries.append(f"{start[:5]} {title}" if start else title)
+                if event_summaries:
+                    preloaded.append(f"TODAY'S SCHEDULE: {'; '.join(event_summaries)}")
+
+            unread_count = unread_data.get("unread_count", 0) if isinstance(unread_data, dict) else 0
+            if unread_count:
+                preloaded.append(f"UNREAD EMAILS: {unread_count}")
+
+            preloaded_block = ""
+            if preloaded:
+                preloaded_block = "\n" + "\n".join(f"  • {p}" for p in preloaded) + "\n"
+
+            if briefing_data:
+                data_block = "\n".join(f"  • {d}" for d in briefing_data)
                 greeting = (
-                    f"[SYSTEM CONTEXT — proactive briefing data, use this to inform your greeting]\n"
-                    f"Brain state: {context}\n\n"
-                    f"Greet the founder by name, then proactively surface the most critical "
-                    f"items above. Be concise — 3-4 sentences max. Start with an appropriate "
-                    f"time-of-day greeting. End with 'What would you like to tackle first?'"
+                    f"[PROACTIVE BRIEFING — real data from Company Brain, speak this naturally]\n"
+                    f"Total issues requiring attention: {total_issues}\n"
+                    f"Open tasks: {open_task_count}\n"
+                    f"Details:\n{data_block}\n"
+                    f"{preloaded_block}\n"
+                    f"INSTRUCTIONS: Greet the founder by name. Then deliver a sharp 20-second "
+                    f"briefing hitting the most critical items. Sound like a COO walking into "
+                    f"a morning standup — confident, specific, no filler. Use actual names "
+                    f"and numbers from the data above. Example tone: 'Morning Khwahish. "
+                    f"Three things. You've got an overdue commitment to [name] from last week. "
+                    f"[Name]'s relationship health dropped to 30 percent. And there's a "
+                    f"high-severity alert on [topic]. Want to tackle the overdue item first?'"
                 )
                 print(f"[GeminiLive] 🔔 Proactive briefing: {len(overdue)} overdue, "
-                      f"{len(alerts)} alerts, {len(at_risk)} at-risk")
+                      f"{len(alerts)} alerts, {len(at_risk)} at-risk, {open_task_count} tasks")
                 return greeting
             else:
                 return (
-                    "Greet the founder warmly and let them know everything looks clear — "
-                    "no overdue commitments, no critical alerts. Ask what they'd like to work on."
+                    f"[PRELOADED CONTEXT — you already have this data, no need to call tools]\n"
+                    f"{preloaded_block}\n"
+                    f"Greet the founder by name. Everything looks clean today — no overdue "
+                    f"commitments, no critical alerts, relationships are healthy. "
+                    f"If there are meetings or unread emails, mention them briefly. "
+                    f"Keep it under 20 words."
                 )
 
         except Exception as e:
@@ -458,7 +479,25 @@ class GeminiLiveBridge:
             except Exception as recall_err:
                 print(f"[GeminiLive] ⚠️  Contextual Recall retrieval failed: {recall_err}")
 
-        system_prompt = build_system_prompt(self.session, past_summary=past_summary)
+        # ── Step 1b: Retrieve long-term memory context ──────────────────────
+        # Fetch recent episode summaries + extracted facts from FirestoreMemoryService
+        memory_context = ""
+        if self._memory_service and hasattr(self._memory_service, "get_recent_context"):
+            try:
+                memory_context = await self._memory_service.get_recent_context(
+                    app_name=APP_NAME, user_id=self._user_id, limit=5
+                )
+                if memory_context:
+                    print(f"[GeminiLive] 🧠 Long-term memory loaded ({len(memory_context)} chars)")
+            except Exception as mem_err:
+                print(f"[GeminiLive] ⚠️  Memory context retrieval failed: {mem_err}")
+
+        # Combine all memory sources into the system prompt
+        combined_memory = past_summary
+        if memory_context:
+            combined_memory = (memory_context + "\n\n" + past_summary) if past_summary else memory_context
+
+        system_prompt = build_system_prompt(self.session, past_summary=combined_memory)
 
         print(f"[GeminiLive] Starting session: model={MODEL_VOICE} user_id={self._user_id}")
 
@@ -500,18 +539,45 @@ class GeminiLiveBridge:
         )
         print(f"[GeminiLive] VoiceAgent ready. tools={[getattr(getattr(t,'func',t),'__name__',str(t)) for t in tool_list]}")
 
-        # ── Step 4: ADK session service ───────────────────────────────────────
-        session_service = InMemorySessionService()
+        # ── Step 4: ADK session service (persistent SQLite) ──────────────────
+        # DatabaseSessionService persists session state + events to SQLite.
+        # This enables ADK's built-in memory features (state prefixes, event
+        # history, memory service integration). Falls back to InMemory if
+        # aiosqlite is not installed.
         adk_session_id = str(uuid.uuid4())
-        await session_service.create_session(
-            app_name=APP_NAME, user_id=self._user_id, session_id=adk_session_id
+        try:
+            db_path = os.path.join(os.path.dirname(__file__), "astra_sessions.db")
+            session_service = DatabaseSessionService(
+                db_url=f"sqlite+aiosqlite:///{db_path}"
+            )
+            print(f"[GeminiLive] Using DatabaseSessionService (SQLite: {db_path})")
+        except Exception as db_err:
+            print(f"[GeminiLive] DatabaseSessionService unavailable ({db_err}), using InMemory")
+            session_service = InMemorySessionService()
+
+        # Create session with initial state including memory context
+        initial_state = {}
+        if memory_context:
+            initial_state["user:memory_context"] = memory_context
+        initial_state["user:session_count"] = (
+            getattr(self, "_session_count", 0) + 1
         )
 
-        # ── Step 5: Runner ────────────────────────────────────────────────────
+        adk_session = await session_service.create_session(
+            app_name=APP_NAME, user_id=self._user_id,
+            session_id=adk_session_id, state=initial_state,
+        )
+
+        # Store references for close()-time memory persistence
+        self._adk_session_service = session_service
+        self._adk_session_id = adk_session_id
+
+        # ── Step 5: Runner (with memory service) ──────────────────────────────
         runner = Runner(
             app_name=APP_NAME,
             agent=voice_agent,
             session_service=session_service,
+            memory_service=self._memory_service,
         )
 
         # ── Step 6: RunConfig — Native Audio BIDI ────────────────────────────
@@ -635,119 +701,182 @@ class GeminiLiveBridge:
         except Exception as e:
             print(f"[upstream_task] Error: {e}")
 
+    # Tool labels — map brain tool names to user-friendly UI labels
+    _TOOL_LABELS = {
+        "analyze_screen_content": "🔍 analyzing screen…",
+        "google_search": "🌐 searching the web…",
+        # Brain
+        "search_memory": "🧠 searching brain…",
+        "get_brain_summary": "🧠 checking brain…",
+        "get_active_commitments": "📋 checking commitments…",
+        "get_overdue_commitments": "⚠️ checking overdue…",
+        "get_active_risks": "🚨 checking risks…",
+        "get_relationship_health": "💚 checking relationship…",
+        "get_at_risk_relationships": "💔 checking relationships…",
+        "get_open_tasks": "✅ checking tasks…",
+        "get_pending_alerts": "🔔 checking alerts…",
+        # Gmail
+        "get_recent_emails": "📧 reading emails…",
+        "get_email_thread": "📧 reading thread…",
+        "send_email": "✉️ sending email…",
+        "reply_to_email": "↩️ replying to email…",
+        "search_emails": "📧 searching emails…",
+        "get_emails_from_sender": "📧 fetching sender emails…",
+        "get_unread_email_count": "📧 counting unread…",
+        # Calendar + Meet
+        "get_upcoming_meetings": "📅 checking calendar…",
+        "get_todays_schedule": "📅 checking today…",
+        "get_meeting_with_contact": "📅 finding meetings…",
+        "create_calendar_event": "📅 creating event…",
+        "quick_schedule": "📅 scheduling…",
+        # Drive
+        "search_drive": "📁 searching Drive…",
+        "list_recent_drive_files": "📁 listing files…",
+        "search_drive_by_type": "📁 filtering files…",
+        "get_drive_file_info": "📁 getting file info…",
+        "create_google_doc": "📝 creating doc…",
+        # Tasks
+        "list_google_tasks": "✅ listing tasks…",
+        "create_google_task": "✅ creating task…",
+        "complete_google_task": "✅ completing task…",
+        "get_google_task_lists": "✅ listing task lists…",
+        # Contacts
+        "search_contacts": "👤 searching contacts…",
+        "get_contact_info": "👤 looking up contact…",
+        "list_all_contacts": "👤 listing contacts…",
+        # Long-Term Memory
+        "recall_memory": "🧠 searching memory…",
+        "save_memory_note": "🧠 saving to memory…",
+        "get_past_conversations": "🧠 recalling past sessions…",
+        "get_known_facts": "🧠 retrieving known facts…",
+    }
+
     async def _downstream_task(self, runner: Runner, session_id: str, run_config: RunConfig):
         """
         Iterates run_live() events and routes audio/control to the browser.
+        Auto-reconnects up to MAX_RECONNECT times on 1008 / transient errors.
         """
-        print("[downstream_task] started, calling runner.run_live()")
-        try:
-            async for event in runner.run_live(
-                user_id=self._user_id,
-                session_id=session_id,
-                live_request_queue=self._q,
-                run_config=run_config,
-            ):
-                if self._closed:
-                    break
+        MAX_RECONNECT = 3
+        attempt = 0
 
-                # ── Determine event type ──────────────────────────────────
-                has_audio = (
-                    event.content
-                    and event.content.parts
-                    and any(
-                        getattr(p, "inline_data", None) and
-                        "audio/pcm" in getattr(p.inline_data, "mime_type", "")
-                        for p in event.content.parts
+        while attempt <= MAX_RECONNECT and not self._closed:
+            if attempt > 0:
+                wait_secs = min(2 ** attempt, 8)
+                print(f"[downstream_task] Reconnecting in {wait_secs}s (attempt {attempt}/{MAX_RECONNECT})…")
+                await self._notify({
+                    "type": "status", "state": "reconnecting",
+                    "message": f"Reconnecting… (attempt {attempt}/{MAX_RECONNECT})",
+                })
+                await asyncio.sleep(wait_secs)
+
+                # Re-create the LiveRequestQueue for a fresh bidi stream
+                try:
+                    self._q = LiveRequestQueue()
+                except Exception:
+                    pass
+
+            print(f"[downstream_task] started, calling runner.run_live() (attempt {attempt})")
+            try:
+                async for event in runner.run_live(
+                    user_id=self._user_id,
+                    session_id=session_id,
+                    live_request_queue=self._q,
+                    run_config=run_config,
+                ):
+                    if self._closed:
+                        return
+
+                    # Reset reconnect counter on successful event
+                    attempt = 0
+
+                    # ── Determine event type ──────────────────────────────────
+                    has_audio = (
+                        event.content
+                        and event.content.parts
+                        and any(
+                            getattr(p, "inline_data", None) and
+                            "audio/pcm" in getattr(p.inline_data, "mime_type", "")
+                            for p in event.content.parts
+                        )
                     )
-                )
 
-                print(f"[downstream_task] event: interrupted={event.interrupted} "
-                      f"turn_complete={event.turn_complete} has_audio={has_audio}")
+                    # ── 1. Forward audio to browser ───────────────────────────
+                    if has_audio and not self._interrupted:
+                        for p in event.content.parts:
+                            if (getattr(p, "inline_data", None) and
+                                    "audio/pcm" in getattr(p.inline_data, "mime_type", "")):
+                                await self._send_bytes(p.inline_data.data)
+                        await self._notify({"type": "status", "state": "speaking"})
 
-                # ── 1. Forward audio to browser ───────────────────────────
-                if has_audio and not self._interrupted:
-                    for p in event.content.parts:
-                        if (getattr(p, "inline_data", None) and
-                                "audio/pcm" in getattr(p.inline_data, "mime_type", "")):
-                            await self._send_bytes(p.inline_data.data)
-                    await self._notify({"type": "status", "state": "speaking"})
+                    # ── 2. Handle interruption ────────────────────────────────
+                    if event.interrupted is True:
+                        self._interrupted = True
+                        await self._notify({"type": "interrupted"})
+                        await self._notify({"type": "status", "state": "listening"})
 
-                # ── 2. Handle interruption ────────────────────────────────
-                if event.interrupted is True:
-                    print("====> [downstream_task] NATIVE BARGE-IN DETECTED <====")
-                    self._interrupted = True
-                    await self._notify({"type": "interrupted"})   # flush browser audio
-                    await self._notify({"type": "status", "state": "listening"})
+                    # ── 3. Handle turn complete ───────────────────────────────
+                    elif event.turn_complete is True:
+                        self._interrupted = False
+                        await self._notify({"type": "status", "state": "listening"})
 
-                # ── 3. Handle turn complete ───────────────────────────────
-                elif event.turn_complete is True:
-                    self._interrupted = False
-                    await self._notify({"type": "status", "state": "listening"})
-
-                # ── 4. Forward input transcription (user's words) ─────────
-                if (getattr(event, "input_transcription", None) and
-                        getattr(event.input_transcription, "text", None)):
-                    text = event.input_transcription.text.strip()
-                    if text and event.input_transcription.finished:
-                        self.session_store_add_transcript("user", text)
-                        await self._notify({
-                            "type": "transcript",
-                            "role": "user",
-                            "text": text,
-                        })
-
-                # ── 5. Forward output transcription (agent's words) ───────
-                if (getattr(event, "output_transcription", None) and
-                        getattr(event.output_transcription, "text", None)):
-                    text = event.output_transcription.text.strip()
-                    if text and event.output_transcription.finished:
-                        self.session_store_add_transcript("model", text)
-                        await self._notify({
-                            "type": "transcript",
-                            "role": "model",
-                            "text": text,
-                        })
-
-                # ── 6. Handle tool calls ──────────────────────────────────
-                if hasattr(event, "get_function_calls"):
-                    calls = event.get_function_calls()
-                    if calls:
-                        await self._notify({"type": "status", "state": "thinking"})
-                        # Map brain tool names to user-friendly labels
-                        _TOOL_LABELS = {
-                            "analyze_screen_content": "🔍 analyzing screen…",
-                            "google_search": "🌐 searching the web…",
-                            "search_memory": "🧠 searching brain…",
-                            "get_brain_summary": "🧠 checking brain…",
-                            "get_active_commitments": "📋 checking commitments…",
-                            "get_overdue_commitments": "⚠️ checking overdue…",
-                            "get_active_risks": "🚨 checking risks…",
-                            "get_relationship_health": "💚 checking relationship…",
-                            "get_at_risk_relationships": "💔 checking relationships…",
-                            "get_recent_emails": "📧 reading emails…",
-                            "get_email_thread": "📧 reading thread…",
-                            "send_email": "✉️ sending email…",
-                            "reply_to_email": "↩️ replying to email…",
-                            "get_upcoming_meetings": "📅 checking calendar…",
-                            "get_todays_schedule": "📅 checking today…",
-                            "get_open_tasks": "✅ checking tasks…",
-                            "get_pending_alerts": "🔔 checking alerts…",
-                        }
-                        for fc in calls:
-                            label = _TOOL_LABELS.get(fc.name, fc.name)
+                    # ── 4. Forward input transcription (user's words) ─────────
+                    if (getattr(event, "input_transcription", None) and
+                            getattr(event.input_transcription, "text", None)):
+                        text = event.input_transcription.text.strip()
+                        if text and event.input_transcription.finished:
+                            self.session_store_add_transcript("user", text)
                             await self._notify({
-                                "type": "tool_call",
-                                "name": label,
-                                "status": "running",
+                                "type": "transcript",
+                                "role": "user",
+                                "text": text,
                             })
 
-        except Exception as e:
-            print(f"[downstream_task] Error: {e}")
-            import traceback
-            traceback.print_exc()
-            await self._notify({"type": "error", "message": f"Session error: {str(e)}"})
+                    # ── 5. Forward output transcription (agent's words) ───────
+                    if (getattr(event, "output_transcription", None) and
+                            getattr(event.output_transcription, "text", None)):
+                        text = event.output_transcription.text.strip()
+                        if text and event.output_transcription.finished:
+                            self.session_store_add_transcript("model", text)
+                            await self._notify({
+                                "type": "transcript",
+                                "role": "model",
+                                "text": text,
+                            })
 
-        print("[downstream_task] run_live() generator completed")
+                    # ── 6. Handle tool calls ──────────────────────────────────
+                    if hasattr(event, "get_function_calls"):
+                        calls = event.get_function_calls()
+                        if calls:
+                            await self._notify({"type": "status", "state": "thinking"})
+                            for fc in calls:
+                                label = self._TOOL_LABELS.get(fc.name, fc.name)
+                                await self._notify({
+                                    "type": "tool_call",
+                                    "name": label,
+                                    "status": "running",
+                                })
+
+                # If run_live() ends normally (generator exhausted), break out
+                print("[downstream_task] run_live() generator completed normally")
+                return
+
+            except Exception as e:
+                err_str = str(e)
+                is_1008 = "1008" in err_str
+                is_transient = is_1008 or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str
+
+                if is_transient and attempt < MAX_RECONNECT:
+                    attempt += 1
+                    print(f"[downstream_task] Transient error (attempt {attempt}): {e}")
+                    continue
+                else:
+                    print(f"[downstream_task] Fatal error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    await self._notify({"type": "error", "message": f"Session error: {err_str}"})
+                    return
+
+        print("[downstream_task] Max reconnect attempts reached or session closed")
 
     # ── External interface (called by main.py WebSocket handler) ─────────────
 
@@ -773,7 +902,7 @@ class GeminiLiveBridge:
         except Exception:
             pass
 
-        # ── Fire-and-forget: post-session summarization (NEW) ────────────────
+        # ── Fire-and-forget: post-session summarization ────────────────────────
         if self._store is not None and self.session is not None:
             try:
                 self._summarise_task = asyncio.create_task(
@@ -782,13 +911,37 @@ class GeminiLiveBridge:
                         user_id=self._user_id,
                         api_key=self.api_key,
                         store=self._store,
-                        session=self.session,   # Pass directly — avoids store-deletion race condition
+                        session=self.session,
                     )
                 )
                 print(f"[GeminiLive] 🧠 Post-session summarization scheduled for "
                       f"session '{self.session.session_id}', user '{self._user_id}'")
             except Exception as e:
                 print(f"[GeminiLive] ⚠️  Could not schedule summarization: {e}")
+
+        # ── Fire-and-forget: persist ADK session to long-term memory service ──
+        if self._memory_service and hasattr(self, "_adk_session_service"):
+            try:
+                async def _persist_to_memory():
+                    try:
+                        # Retrieve the full ADK session with events
+                        adk_session = await self._adk_session_service.get_session(
+                            app_name=APP_NAME,
+                            user_id=self._user_id,
+                            session_id=self._adk_session_id,
+                        )
+                        if adk_session and adk_session.events:
+                            await self._memory_service.add_session_to_memory(adk_session)
+                            print(f"[GeminiLive] 🧠 Session persisted to long-term memory "
+                                  f"({len(adk_session.events)} events)")
+                        else:
+                            print("[GeminiLive] 🧠 No events to persist to memory")
+                    except Exception as mem_err:
+                        print(f"[GeminiLive] ⚠️  Memory persistence failed: {mem_err}")
+
+                asyncio.create_task(_persist_to_memory())
+            except Exception as e:
+                print(f"[GeminiLive] ⚠️  Could not schedule memory persistence: {e}")
 
     async def _notify(self, payload: dict):
         """Send a JSON control message to the browser."""

@@ -1,19 +1,17 @@
 """
-Astra OS — Google Calendar Integration
-========================================
-Async wrapper around the Google Calendar API v3.
+Astra OS — Google Calendar Integration (Enhanced)
+===================================================
+Full read/write Calendar API + automatic Google Meet link creation.
 
-Auth: shares the same OAuth 2.0 credentials as Gmail (stored in token.json).
-      If the token already includes calendar scope it will work immediately.
-      Otherwise re-authenticate to add the scope.
+Capabilities:
+  - List upcoming events
+  - Get today's schedule
+  - Find events with specific contacts
+  - CREATE events with automatic Google Meet links
+  - Quick schedule: "schedule a call with X tomorrow at 3pm"
 
 Scopes used:
-  calendar.readonly  — read events, attendees, descriptions
-
-Usage:
-    client = CalendarClient("credentials.json", "gmail_token.json")
-    events = await client.get_upcoming_events(days_ahead=7)
-    context = await client.get_meeting_context(event_id="abc123")
+  calendar (full) — read + create + modify events
 """
 
 import asyncio
@@ -24,13 +22,20 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+import os
+import uuid
 
 
+# Full combined scopes
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/contacts.readonly",
+    "https://www.googleapis.com/auth/tasks",
 ]
 
 MAX_RESULTS = 20
@@ -45,26 +50,16 @@ class CalendarEvent:
         "is_organizer", "conference_link",
     )
 
-    def __init__(
-        self,
-        event_id: str,
-        title: str,
-        start_dt: datetime,
-        end_dt: datetime,
-        attendees: list[str],
-        description: str = "",
-        location: str = "",
-        is_organizer: bool = False,
-        conference_link: str = "",
-    ):
-        self.event_id       = event_id
-        self.title          = title
-        self.start_dt       = start_dt
-        self.end_dt         = end_dt
-        self.attendees      = attendees           # list of email addresses
-        self.description    = description
-        self.location       = location
-        self.is_organizer   = is_organizer
+    def __init__(self, event_id, title, start_dt, end_dt, attendees,
+                 description="", location="", is_organizer=False, conference_link=""):
+        self.event_id        = event_id
+        self.title           = title
+        self.start_dt        = start_dt
+        self.end_dt          = end_dt
+        self.attendees       = attendees
+        self.description     = description
+        self.location        = location
+        self.is_organizer    = is_organizer
         self.conference_link = conference_link
 
     @property
@@ -73,7 +68,6 @@ class CalendarEvent:
 
     @property
     def starts_in_minutes(self) -> int:
-        """Minutes until the event starts (negative if already started)."""
         now = datetime.now(tz=timezone.utc)
         start = self.start_dt.replace(tzinfo=timezone.utc) if self.start_dt.tzinfo is None else self.start_dt
         return int((start - now).total_seconds() / 60)
@@ -92,79 +86,45 @@ class CalendarEvent:
             "duration_min":    self.duration_minutes,
         }
 
-    def __repr__(self) -> str:
-        return f"<CalendarEvent '{self.title}' @ {self.start_dt.isoformat()} ({len(self.attendees)} attendees)>"
-
 
 class CalendarClient:
-    """
-    Async Google Calendar API client.
-
-    All network I/O runs in a thread pool so it never blocks
-    the FastAPI / asyncio event loop.
-    """
+    """Async Google Calendar API client with read/write + Meet creation."""
 
     def __init__(self, credentials_path: str, token_path: str):
         self._credentials_path = credentials_path
         self._token_path       = token_path
-        self._service          = None
-
-    # ── Auth ──────────────────────────────────────────────────────────────────
 
     def _get_credentials(self) -> Credentials:
-        """Load or refresh OAuth credentials. Opens browser on first run."""
-        import os
         creds = None
-
         if os.path.exists(self._token_path):
             creds = Credentials.from_authorized_user_file(self._token_path, SCOPES)
-
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self._credentials_path, SCOPES
-                )
+                flow = InstalledAppFlow.from_client_secrets_file(self._credentials_path, SCOPES)
                 creds = flow.run_local_server(port=0)
-
             with open(self._token_path, "w") as f:
                 f.write(creds.to_json())
-
         return creds
 
     def _build_service(self):
-        if self._service is None:
-            creds = self._get_credentials()
-            self._service = build(
-                "calendar", "v3", credentials=creds, cache_discovery=False
-            )
-        return self._service
+        """Fresh service per call to avoid connection pool issues."""
+        creds = self._get_credentials()
+        return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     # ── Read ──────────────────────────────────────────────────────────────────
 
-    async def get_upcoming_events(
-        self,
-        days_ahead: int = 7,
-        max_results: int = MAX_RESULTS,
-    ) -> list[CalendarEvent]:
-        """
-        Fetch events from now until days_ahead days from now.
-        Returns events sorted by start time, ascending.
-        """
-        now      = datetime.utcnow().replace(tzinfo=timezone.utc)
+    async def get_upcoming_events(self, days_ahead: int = 7, max_results: int = MAX_RESULTS) -> list[CalendarEvent]:
+        now = datetime.utcnow().replace(tzinfo=timezone.utc)
         time_min = now.isoformat()
         time_max = (now + timedelta(days=days_ahead)).isoformat()
 
         def _fetch():
             service = self._build_service()
             result = service.events().list(
-                calendarId="primary",
-                timeMin=time_min,
-                timeMax=time_max,
-                maxResults=max_results,
-                singleEvents=True,
-                orderBy="startTime",
+                calendarId="primary", timeMin=time_min, timeMax=time_max,
+                maxResults=max_results, singleEvents=True, orderBy="startTime",
             ).execute()
             return result.get("items", [])
 
@@ -174,26 +134,15 @@ class CalendarClient:
             print(f"[Calendar] ❌ list events failed: {e}")
             return []
 
-        events = []
-        for item in raw_events:
-            event = self._parse_event(item)
-            if event:
-                events.append(event)
-
-        return events
+        return [ev for item in raw_events if (ev := self._parse_event(item))]
 
     async def get_todays_events(self) -> list[CalendarEvent]:
-        """Convenience method: fetch all events for today."""
         return await self.get_upcoming_events(days_ahead=1)
 
     async def get_event(self, event_id: str) -> Optional[CalendarEvent]:
-        """Fetch a single event by ID."""
         def _fetch():
             service = self._build_service()
-            return service.events().get(
-                calendarId="primary", eventId=event_id
-            ).execute()
-
+            return service.events().get(calendarId="primary", eventId=event_id).execute()
         try:
             item = await asyncio.to_thread(_fetch)
             return self._parse_event(item)
@@ -202,31 +151,17 @@ class CalendarClient:
             return None
 
     async def get_meeting_context(self, event_id: str) -> Optional[dict]:
-        """
-        Return enriched context about a meeting — useful for the brain
-        to understand who will be on the call and what's expected.
-        """
         event = await self.get_event(event_id)
         if not event:
             return None
-
         return {
-            "title":        event.title,
-            "attendees":    event.attendees,
-            "description":  event.description,
-            "duration_min": event.duration_minutes,
-            "location":     event.location,
-            "video_link":   event.conference_link,
-            "starts_in":    f"{event.starts_in_minutes} minutes",
+            "title": event.title, "attendees": event.attendees,
+            "description": event.description, "duration_min": event.duration_minutes,
+            "location": event.location, "video_link": event.conference_link,
+            "starts_in": f"{event.starts_in_minutes} minutes",
         }
 
-    async def get_events_with_contact(
-        self, contact_email: str, days_back: int = 30, days_ahead: int = 7
-    ) -> list[CalendarEvent]:
-        """
-        Find past and upcoming meetings involving a specific contact.
-        Useful for relationship context.
-        """
+    async def get_events_with_contact(self, contact_email: str, days_back: int = 30, days_ahead: int = 7) -> list[CalendarEvent]:
         now = datetime.utcnow().replace(tzinfo=timezone.utc)
         time_min = (now - timedelta(days=days_back)).isoformat()
         time_max = (now + timedelta(days=days_ahead)).isoformat()
@@ -234,13 +169,9 @@ class CalendarClient:
         def _fetch():
             service = self._build_service()
             result = service.events().list(
-                calendarId="primary",
-                timeMin=time_min,
-                timeMax=time_max,
-                maxResults=50,
-                singleEvents=True,
-                orderBy="startTime",
-                q=contact_email,   # Google's search parameter
+                calendarId="primary", timeMin=time_min, timeMax=time_max,
+                maxResults=50, singleEvents=True, orderBy="startTime",
+                q=contact_email,
             ).execute()
             return result.get("items", [])
 
@@ -255,75 +186,152 @@ class CalendarClient:
             event = self._parse_event(item)
             if event and contact_email.lower() in [a.lower() for a in event.attendees]:
                 events.append(event)
-
         return events
+
+    # ── Write — Create Events with Google Meet ────────────────────────────────
+
+    async def create_event(
+        self,
+        title: str,
+        start_time: str,
+        duration_minutes: int = 30,
+        attendees: list[str] = None,
+        description: str = "",
+        add_meet: bool = True,
+    ) -> Optional[dict]:
+        """
+        Create a calendar event.
+
+        Args:
+            title: Event title
+            start_time: ISO 8601 datetime string (e.g. "2025-03-16T15:00:00+05:30")
+            duration_minutes: Duration in minutes (default 30)
+            attendees: List of email addresses to invite
+            description: Optional event description
+            add_meet: If True, auto-create a Google Meet link
+
+        Returns:
+            Dict with event_id, link, meet_link, or None on failure
+        """
+        start_dt = datetime.fromisoformat(start_time)
+        end_dt = start_dt + timedelta(minutes=duration_minutes)
+
+        event_body = {
+            "summary": title,
+            "description": description,
+            "start": {"dateTime": start_dt.isoformat(), "timeZone": "UTC"},
+            "end": {"dateTime": end_dt.isoformat(), "timeZone": "UTC"},
+        }
+
+        if attendees:
+            event_body["attendees"] = [{"email": e} for e in attendees]
+
+        if add_meet:
+            event_body["conferenceData"] = {
+                "createRequest": {
+                    "requestId": str(uuid.uuid4()),
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
+            }
+
+        def _create():
+            service = self._build_service()
+            return service.events().insert(
+                calendarId="primary",
+                body=event_body,
+                conferenceDataVersion=1 if add_meet else 0,
+                sendUpdates="all",
+            ).execute()
+
+        try:
+            result = await asyncio.to_thread(_create)
+            meet_link = ""
+            for ep in result.get("conferenceData", {}).get("entryPoints", []):
+                if ep.get("entryPointType") == "video":
+                    meet_link = ep.get("uri", "")
+                    break
+
+            print(f"[Calendar] ✅ Event created: {title} ({meet_link or 'no meet'})")
+            return {
+                "event_id": result["id"],
+                "link": result.get("htmlLink", ""),
+                "meet_link": meet_link,
+                "title": title,
+                "start": start_dt.isoformat(),
+                "attendees": attendees or [],
+            }
+        except Exception as e:
+            print(f"[Calendar] ❌ create event failed: {e}")
+            return None
+
+    async def quick_add(self, text: str) -> Optional[dict]:
+        """
+        Create an event using natural language.
+        Google parses: "Lunch with Sarah tomorrow at noon"
+        """
+        def _create():
+            service = self._build_service()
+            return service.events().quickAdd(
+                calendarId="primary", text=text
+            ).execute()
+
+        try:
+            result = await asyncio.to_thread(_create)
+            return {
+                "event_id": result["id"],
+                "link": result.get("htmlLink", ""),
+                "title": result.get("summary", text),
+            }
+        except Exception as e:
+            print(f"[Calendar] ❌ quick add failed: {e}")
+            return None
 
     # ── Parsing ───────────────────────────────────────────────────────────────
 
     def _parse_event(self, item: dict) -> Optional[CalendarEvent]:
-        """Parse a raw Calendar API event dict into a CalendarEvent."""
         try:
             title    = item.get("summary", "(no title)")
             event_id = item["id"]
-
-            # Parse start/end — can be dateTime or date (all-day)
             start_dt = self._parse_datetime(item.get("start", {}))
             end_dt   = self._parse_datetime(item.get("end", {}))
             if not start_dt or not end_dt:
                 return None
 
-            # Attendees — extract emails, exclude calendar owner
             attendees = []
-            creator_email = item.get("creator", {}).get("email", "")
-            organizer_email = item.get("organizer", {}).get("email", "")
-
             for att in item.get("attendees", []):
                 email = att.get("email", "")
                 if email and not att.get("self", False):
                     attendees.append(email)
 
-            # Conference / video link (Google Meet, Zoom, etc.)
             conference_link = ""
-            entry_points = (
-                item.get("conferenceData", {})
-                    .get("entryPoints", [])
-            )
-            for ep in entry_points:
+            for ep in item.get("conferenceData", {}).get("entryPoints", []):
                 if ep.get("entryPointType") == "video":
                     conference_link = ep.get("uri", "")
                     break
 
-            return CalendarEvent(
-                event_id        = event_id,
-                title           = title,
-                start_dt        = start_dt,
-                end_dt          = end_dt,
-                attendees       = attendees,
-                description     = item.get("description", ""),
-                location        = item.get("location", ""),
-                is_organizer    = (organizer_email == creator_email),
-                conference_link = conference_link,
-            )
+            organizer_email = item.get("organizer", {}).get("email", "")
+            creator_email = item.get("creator", {}).get("email", "")
 
+            return CalendarEvent(
+                event_id=event_id, title=title, start_dt=start_dt, end_dt=end_dt,
+                attendees=attendees, description=item.get("description", ""),
+                location=item.get("location", ""),
+                is_organizer=(organizer_email == creator_email),
+                conference_link=conference_link,
+            )
         except Exception as e:
             print(f"[Calendar] ⚠️  parse event failed: {e}")
             return None
 
     def _parse_datetime(self, dt_obj: dict) -> Optional[datetime]:
-        """Handle both dateTime and date (all-day) event formats."""
         if "dateTime" in dt_obj:
-            raw = dt_obj["dateTime"]
-            # Handle timezone offset like +05:30
             try:
-                return datetime.fromisoformat(raw)
+                return datetime.fromisoformat(dt_obj["dateTime"])
             except ValueError:
                 return None
         elif "date" in dt_obj:
-            # All-day event — treat as midnight UTC
             try:
-                return datetime.fromisoformat(dt_obj["date"]).replace(
-                    tzinfo=timezone.utc
-                )
+                return datetime.fromisoformat(dt_obj["date"]).replace(tzinfo=timezone.utc)
             except ValueError:
                 return None
         return None

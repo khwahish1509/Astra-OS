@@ -46,6 +46,7 @@ FIRESTORE_PROJECT   = os.getenv("FIRESTORE_PROJECT_ID", "")
 CREDENTIALS_PATH    = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
 TOKEN_PATH          = os.getenv("GMAIL_TOKEN_PATH", "gmail_token.json")
 FOUNDER_ID          = os.getenv("FOUNDER_ID", "default_founder")
+APP_NAME            = "astra_coach"  # must match gemini_session.APP_NAME
 EMAIL_SCAN_INTERVAL = int(os.getenv("EMAIL_SCAN_INTERVAL_MINUTES", "15"))
 RISK_CHECK_INTERVAL = int(os.getenv("RISK_CHECK_INTERVAL_MINUTES", "30"))
 
@@ -61,9 +62,13 @@ _brain_store = None
 _embeddings  = None
 _gmail       = None
 _calendar    = None
+_drive       = None
+_tasks       = None
+_contacts    = None
 _email_scanner = None
 _risk_monitor  = None
 _brain_tool_fns = None   # dict of {name: async_fn} from brain_tools.build_tools()
+_memory_service = None   # FirestoreMemoryService for long-term memory
 
 # ─────────────────────────────────────────────
 # App lifecycle
@@ -71,7 +76,7 @@ _brain_tool_fns = None   # dict of {name: async_fn} from brain_tools.build_tools
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _brain_store, _embeddings, _gmail, _calendar, _email_scanner, _risk_monitor, _brain_tool_fns
+    global _brain_store, _embeddings, _gmail, _calendar, _drive, _tasks, _contacts, _email_scanner, _risk_monitor, _brain_tool_fns, _memory_service
 
     print("🚀 Astra OS starting...")
     print(f"   Voice Model: {os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-native-audio-latest')}")
@@ -83,11 +88,29 @@ async def lifespan(app: FastAPI):
             from brain.embeddings import EmbeddingPipeline
             from integrations.gmail_client import GmailClient
             from integrations.calendar_client import CalendarClient
+            from integrations.drive_client import DriveClient
+            from integrations.tasks_client import TasksClient
+            from integrations.contacts_client import ContactsClient
 
             _brain_store = CompanyBrainStore(project_id=FIRESTORE_PROJECT)
             _embeddings  = EmbeddingPipeline(api_key=GOOGLE_API_KEY)
             _gmail       = GmailClient(CREDENTIALS_PATH, TOKEN_PATH)
             _calendar    = CalendarClient(CREDENTIALS_PATH, TOKEN_PATH)
+            _drive       = DriveClient(CREDENTIALS_PATH, TOKEN_PATH)
+            _tasks       = TasksClient(CREDENTIALS_PATH, TOKEN_PATH)
+            _contacts    = ContactsClient(CREDENTIALS_PATH, TOKEN_PATH)
+
+            # Initialize long-term memory service (FirestoreMemoryService)
+            try:
+                from memory.firestore_memory_service import FirestoreMemoryService
+                _memory_service = FirestoreMemoryService(
+                    project_id=FIRESTORE_PROJECT,
+                    api_key=GOOGLE_API_KEY,
+                )
+                print("[Astra OS] 🧠 Long-term memory service initialized (Firestore + Gemini embeddings)")
+            except Exception as mem_err:
+                print(f"[Astra OS] ⚠️  Memory service init failed: {mem_err} — continuing without long-term memory")
+                _memory_service = None
 
             # Start background agents if Gmail is authenticated
             from agents.background import EmailScannerAgent, RiskMonitorAgent
@@ -106,6 +129,8 @@ async def lifespan(app: FastAPI):
             tool_deps = ToolDeps(
                 store=_brain_store, embeddings=_embeddings,
                 gmail=_gmail, calendar=_calendar, founder_id=FOUNDER_ID,
+                drive=_drive, tasks=_tasks, contacts=_contacts,
+                memory_service=_memory_service, app_name=APP_NAME,
             )
             _brain_tool_fns = build_tools(tool_deps)
             print(f"[Astra OS] 🧠 {len(_brain_tool_fns)} brain tools built for voice session")
@@ -446,9 +471,10 @@ async def interview_websocket(ws: WebSocket, session_id: str):
         ws_send_text=ws.send_text,
         store=store,                      # enables Contextual Recall + post-session summarization
         user_id=session.user_name or "",  # normalised to stable Firestore key inside bridge
-        brain_tools=_brain_tool_fns,      # 22 brain tools for Astra OS voice session
+        brain_tools=_brain_tool_fns,      # 45 brain tools for Astra OS voice session
         brain_store=_brain_store,         # for proactive alerts on session start
         founder_id=FOUNDER_ID,            # for querying brain state
+        memory_service=_memory_service,   # long-term memory (Firestore + episodic)
     )
 
     # Wire up transcript persistence
@@ -575,6 +601,12 @@ async def health():
         "active_bridges": len(active_bridges),
         "brain_active": _brain_store is not None,
         "gmail_auth": _gmail.is_authenticated() if _gmail else False,
+        "integrations": {
+            "drive":    _drive is not None,
+            "tasks":    _tasks is not None,
+            "contacts": _contacts is not None,
+            "memory":   _memory_service is not None,
+        },
         "background_agents": {
             "email_scanner": _email_scanner._running if _email_scanner else False,
             "risk_monitor":  _risk_monitor._running if _risk_monitor else False,
@@ -750,6 +782,138 @@ async def get_relationships():
     return [{"contact_email": p.contact_email, "name": p.name,
              "health_score": p.health_score, "tone_trend": p.tone_trend.value,
              "interaction_count": p.interaction_count} for p in profiles]
+
+
+# ─────────────────────────────────────────────
+# Memory Debug / Test Endpoints
+# ─────────────────────────────────────────────
+
+@app.get("/brain/memory/facts")
+async def get_memory_facts():
+    """Debug: list all stored facts in long-term memory."""
+    if not _memory_service:
+        raise HTTPException(503, "Memory service not initialized")
+    try:
+        db = _memory_service._get_db()
+        user_key = f"{APP_NAME}__{FOUNDER_ID}".replace("/", "_").replace(" ", "_")
+        facts_ref = (
+            db.collection(_memory_service.MEMORIES_COLLECTION)
+            .document(user_key)
+            .collection(_memory_service.FACTS_SUBCOLLECTION)
+        )
+        docs = await asyncio.to_thread(lambda: list(facts_ref.limit(50).stream()))
+        return [doc.to_dict() for doc in docs]
+    except Exception as e:
+        raise HTTPException(500, f"Failed to query facts: {e}")
+
+
+@app.get("/brain/memory/episodes")
+async def get_memory_episodes(limit: int = 10):
+    """Debug: list recent episodic summaries from long-term memory."""
+    if not _memory_service:
+        raise HTTPException(503, "Memory service not initialized")
+    try:
+        db = _memory_service._get_db()
+        user_key = f"{APP_NAME}__{FOUNDER_ID}".replace("/", "_").replace(" ", "_")
+        episodes_ref = (
+            db.collection(_memory_service.MEMORIES_COLLECTION)
+            .document(user_key)
+            .collection(_memory_service.EPISODES_SUBCOLLECTION)
+        )
+        docs = await asyncio.to_thread(
+            lambda: list(
+                episodes_ref
+                .order_by("timestamp", direction="DESCENDING")
+                .limit(limit)
+                .stream()
+            )
+        )
+        return [doc.to_dict() for doc in docs]
+    except Exception as e:
+        raise HTTPException(500, f"Failed to query episodes: {e}")
+
+
+@app.get("/brain/memory/events")
+async def get_memory_events(limit: int = 30):
+    """Debug: list recent conversation events from long-term memory."""
+    if not _memory_service:
+        raise HTTPException(503, "Memory service not initialized")
+    try:
+        db = _memory_service._get_db()
+        user_key = f"{APP_NAME}__{FOUNDER_ID}".replace("/", "_").replace(" ", "_")
+        events_ref = (
+            db.collection(_memory_service.MEMORIES_COLLECTION)
+            .document(user_key)
+            .collection(_memory_service.EVENTS_SUBCOLLECTION)
+        )
+        docs = await asyncio.to_thread(
+            lambda: list(
+                events_ref
+                .order_by("timestamp", direction="DESCENDING")
+                .limit(limit)
+                .stream()
+            )
+        )
+        return [doc.to_dict() for doc in docs]
+    except Exception as e:
+        raise HTTPException(500, f"Failed to query events: {e}")
+
+
+@app.get("/brain/memory/search")
+async def search_memory(query: str):
+    """Debug: test memory search with a query string."""
+    if not _memory_service:
+        raise HTTPException(503, "Memory service not initialized")
+    try:
+        response = await _memory_service.search_memory(
+            app_name=APP_NAME, user_id=FOUNDER_ID, query=query
+        )
+        results = []
+        for entry in (response.memories or []):
+            text = ""
+            if entry.content and entry.content.parts:
+                text = " ".join(
+                    p.text for p in entry.content.parts if hasattr(p, "text") and p.text
+                )
+            results.append({
+                "content": text[:500],
+                "author": getattr(entry, "author", ""),
+                "timestamp": getattr(entry, "timestamp", ""),
+            })
+        return {"query": query, "results": results, "count": len(results)}
+    except Exception as e:
+        raise HTTPException(500, f"Memory search failed: {e}")
+
+
+@app.get("/brain/memory/status")
+async def memory_status():
+    """Debug: check memory service status and data counts."""
+    if not _memory_service:
+        return {"status": "not_initialized", "reason": "Memory service not configured"}
+    try:
+        db = _memory_service._get_db()
+        user_key = f"{APP_NAME}__{FOUNDER_ID}".replace("/", "_").replace(" ", "_")
+        base_ref = db.collection(_memory_service.MEMORIES_COLLECTION).document(user_key)
+
+        facts_count = await asyncio.to_thread(
+            lambda: len(list(base_ref.collection("facts").limit(100).stream()))
+        )
+        episodes_count = await asyncio.to_thread(
+            lambda: len(list(base_ref.collection("episodes").limit(100).stream()))
+        )
+        events_count = await asyncio.to_thread(
+            lambda: len(list(base_ref.collection("events").limit(500).stream()))
+        )
+
+        return {
+            "status": "active",
+            "user_key": user_key,
+            "facts_count": facts_count,
+            "episodes_count": episodes_count,
+            "events_count": events_count,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 # ─────────────────────────────────────────────

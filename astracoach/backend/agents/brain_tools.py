@@ -7,25 +7,62 @@ function.  ADK wraps them automatically via FunctionTool.
 Tool groups:
   Memory / Insights   — search, retrieve, update insights from the Brain
   Relationships       — get health scores, at-risk contacts
-  Tasks               — list open tasks, mark done
+  Brain Tasks         — list open tasks, mark done (internal brain tasks)
   Alerts              — get pending alerts, dismiss
-  Gmail               — read emails, send / reply
-  Calendar            — upcoming events, meeting context
+  Gmail               — read, search, send, reply (parallel fetching)
+  Calendar            — upcoming events, create events with Google Meet
+  Google Drive        — search, list, create docs
+  Google Tasks        — list, create, complete tasks (personal to-dos)
+  Google Contacts     — search, lookup contacts by email
   Company Context     — founder profile, team roster
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+import time as _time
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from brain.store import CompanyBrainStore
     from brain.embeddings import EmbeddingPipeline
     from integrations.gmail_client import GmailClient
     from integrations.calendar_client import CalendarClient
+    from integrations.drive_client import DriveClient
+    from integrations.tasks_client import TasksClient
+    from integrations.contacts_client import ContactsClient
 
 from brain.models import InsightStatus, InsightType, TaskStatus
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TTL Cache — reduces Firestore/API round-trips for frequently called tools
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _TTLCache:
+    """Simple async-aware TTL cache. Thread-safe for single event loop."""
+
+    def __init__(self, default_ttl: float = 30.0):
+        self._store: dict[str, tuple[float, Any]] = {}
+        self._default_ttl = default_ttl
+
+    def get(self, key: str) -> Any | None:
+        entry = self._store.get(key)
+        if entry and _time.monotonic() < entry[0]:
+            return entry[1]
+        self._store.pop(key, None)
+        return None
+
+    def put(self, key: str, value: Any, ttl: float | None = None):
+        self._store[key] = (_time.monotonic() + (ttl or self._default_ttl), value)
+
+    def invalidate(self, prefix: str = ""):
+        if not prefix:
+            self._store.clear()
+        else:
+            keys = [k for k in self._store if k.startswith(prefix)]
+            for k in keys:
+                del self._store[k]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -44,12 +81,23 @@ class ToolDeps:
         gmail:      "GmailClient",
         calendar:   "CalendarClient",
         founder_id: str,
+        drive:          "DriveClient"    = None,
+        tasks:          "TasksClient"    = None,
+        contacts:       "ContactsClient" = None,
+        memory_service = None,  # ADK BaseMemoryService for long-term recall
+        app_name:  str = "AstraAgent",
     ):
         self.store      = store
         self.embeddings = embeddings
         self.gmail      = gmail
         self.calendar   = calendar
         self.founder_id = founder_id
+        self.drive      = drive
+        self.tasks      = tasks
+        self.contacts   = contacts
+        self.memory_service = memory_service
+        self.app_name   = app_name
+        self.cache      = _TTLCache(default_ttl=45.0)  # 45s cache for read-heavy tools
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,6 +212,7 @@ def build_tools(deps: ToolDeps) -> dict:
             {"ok": true} on success
         """
         await deps.store.update_insight_status(insight_id, InsightStatus.RESOLVED)
+        deps.cache.invalidate("brain_summary")
         return {"ok": True}
 
     async def dismiss_insight(insight_id: str) -> dict:
@@ -177,6 +226,7 @@ def build_tools(deps: ToolDeps) -> dict:
             {"ok": true} on success
         """
         await deps.store.update_insight_status(insight_id, InsightStatus.DISMISSED)
+        deps.cache.invalidate("brain_summary")
         return {"ok": True}
 
     # ── Relationships ─────────────────────────────────────────────────────
@@ -454,8 +504,14 @@ def build_tools(deps: ToolDeps) -> dict:
         Returns:
             List of event dicts with title, attendees, start time, duration
         """
+        cache_key = f"upcoming_meetings:{days_ahead}"
+        cached = deps.cache.get(cache_key)
+        if cached is not None:
+            return cached
         events = await deps.calendar.get_upcoming_events(days_ahead=days_ahead)
-        return [e.to_dict() for e in events]
+        result = [e.to_dict() for e in events]
+        deps.cache.put(cache_key, result, ttl=120)
+        return result
 
     async def get_todays_schedule() -> list[dict]:
         """
@@ -464,8 +520,13 @@ def build_tools(deps: ToolDeps) -> dict:
         Returns:
             List of today's events sorted by start time
         """
+        cached = deps.cache.get("todays_schedule")
+        if cached is not None:
+            return cached
         events = await deps.calendar.get_todays_events()
-        return [e.to_dict() for e in events]
+        result = [e.to_dict() for e in events]
+        deps.cache.put("todays_schedule", result, ttl=120)  # 2 min cache
+        return result
 
     async def get_meeting_with_contact(contact_email: str) -> list[dict]:
         """
@@ -480,6 +541,510 @@ def build_tools(deps: ToolDeps) -> dict:
         events = await deps.calendar.get_events_with_contact(contact_email)
         return [e.to_dict() for e in events]
 
+    # ── Gmail — Enhanced ──────────────────────────────────────────────────
+
+    async def search_emails(query: str, max_results: int = 15) -> list[dict]:
+        """
+        Search emails using Gmail's powerful query syntax.
+        Supports: from:person, to:person, subject:keyword, has:attachment,
+        is:unread, label:important, newer_than:2d, etc.
+
+        Args:
+            query: Gmail search query (e.g. 'from:investor subject:term sheet')
+            max_results: Max emails to return
+
+        Returns:
+            List of email dicts with sender, subject, body preview
+        """
+        emails = await deps.gmail.search_emails(query=query, max_results=max_results)
+        return [
+            {
+                "message_id":   e.message_id,
+                "thread_id":    e.thread_id,
+                "sender":       e.sender,
+                "sender_email": e.sender_email,
+                "subject":      e.subject,
+                "body":         e.body[:800],
+                "timestamp":    e.timestamp,
+                "is_unread":    e.is_unread,
+            }
+            for e in emails
+        ]
+
+    async def get_emails_from_sender(sender_email: str, max_results: int = 10) -> list[dict]:
+        """
+        Fetch recent emails from a specific sender.
+
+        Args:
+            sender_email: Email address of the sender
+            max_results: Max emails to return
+
+        Returns:
+            List of email dicts from this sender
+        """
+        emails = await deps.gmail.get_emails_from_sender(
+            sender_email=sender_email, max_results=max_results
+        )
+        return [
+            {
+                "message_id":   e.message_id,
+                "thread_id":    e.thread_id,
+                "sender":       e.sender,
+                "subject":      e.subject,
+                "body":         e.body[:800],
+                "timestamp":    e.timestamp,
+                "is_unread":    e.is_unread,
+            }
+            for e in emails
+        ]
+
+    async def get_unread_email_count() -> dict:
+        """
+        Get the count of unread emails in inbox. Fast — no message fetch.
+
+        Returns:
+            {"unread_count": int}
+        """
+        cached = deps.cache.get("unread_count")
+        if cached is not None:
+            return cached
+        count = await deps.gmail.get_unread_count()
+        result = {"unread_count": count}
+        deps.cache.put("unread_count", result, ttl=60)
+        return result
+
+    # ── Calendar — Create Events with Meet ─────────────────────────────────
+
+    async def create_calendar_event(
+        title: str,
+        start_time: str,
+        duration_minutes: int = 30,
+        attendees: str = "",
+        description: str = "",
+        add_meet: bool = True,
+    ) -> dict:
+        """
+        Create a new calendar event, optionally with a Google Meet link.
+
+        Args:
+            title: Event title (e.g. "Investor call with Sequoia")
+            start_time: ISO 8601 datetime (e.g. "2025-03-20T15:00:00+05:30")
+            duration_minutes: Duration in minutes (default 30)
+            attendees: Comma-separated email addresses to invite
+            description: Optional event description
+            add_meet: Auto-create Google Meet link (default True)
+
+        Returns:
+            Dict with event_id, link, meet_link, or error
+        """
+        attendee_list = [e.strip() for e in attendees.split(",") if e.strip()] if attendees else []
+        result = await deps.calendar.create_event(
+            title=title,
+            start_time=start_time,
+            duration_minutes=duration_minutes,
+            attendees=attendee_list,
+            description=description,
+            add_meet=add_meet,
+        )
+        if result:
+            deps.cache.invalidate("todays_schedule")
+            deps.cache.invalidate("upcoming_meetings")
+            return result
+        return {"error": "Failed to create event"}
+
+    async def quick_schedule(text: str) -> dict:
+        """
+        Create an event using natural language. Google parses the text.
+        Examples: "Lunch with Sarah tomorrow at noon", "Team standup Monday 9am"
+
+        Args:
+            text: Natural language event description
+
+        Returns:
+            Dict with event_id and link, or error
+        """
+        result = await deps.calendar.quick_add(text=text)
+        if result:
+            return result
+        return {"error": "Failed to quick-schedule event"}
+
+    # ── Google Drive ───────────────────────────────────────────────────────
+
+    async def search_drive(query: str, max_results: int = 10) -> list[dict]:
+        """
+        Search Google Drive files by name or content.
+        Uses full-text search across all accessible files.
+
+        Args:
+            query: Search string (e.g. "pitch deck", "Q4 financials")
+            max_results: Max files to return
+
+        Returns:
+            List of file dicts with name, type, link, modified date
+        """
+        if not deps.drive:
+            return [{"error": "Drive integration not configured"}]
+        files = await deps.drive.search_files(query=query, max_results=max_results)
+        return [f.to_dict() for f in files]
+
+    async def list_recent_drive_files(max_results: int = 15) -> list[dict]:
+        """
+        List recently modified files in Google Drive.
+
+        Args:
+            max_results: Max files to return
+
+        Returns:
+            List of file dicts sorted by last modified
+        """
+        if not deps.drive:
+            return [{"error": "Drive integration not configured"}]
+        files = await deps.drive.list_recent_files(max_results=max_results)
+        return [f.to_dict() for f in files]
+
+    async def search_drive_by_type(file_type: str, max_results: int = 10) -> list[dict]:
+        """
+        Search Drive files by type.
+
+        Args:
+            file_type: One of: doc, sheet, slides, pdf, folder, image
+            max_results: Max files to return
+
+        Returns:
+            List of matching file dicts
+        """
+        if not deps.drive:
+            return [{"error": "Drive integration not configured"}]
+        files = await deps.drive.search_by_type(file_type=file_type, max_results=max_results)
+        return [f.to_dict() for f in files]
+
+    async def get_drive_file_info(file_id: str) -> dict:
+        """
+        Get detailed metadata for a specific Drive file.
+
+        Args:
+            file_id: Google Drive file ID
+
+        Returns:
+            File metadata dict with name, type, link, size, owners
+        """
+        if not deps.drive:
+            return {"error": "Drive integration not configured"}
+        result = await deps.drive.get_file_info(file_id=file_id)
+        return result or {"error": "File not found"}
+
+    async def create_google_doc(title: str) -> dict:
+        """
+        Create a new blank Google Doc in Drive.
+
+        Args:
+            title: Document title
+
+        Returns:
+            Dict with file_id, link, name
+        """
+        if not deps.drive:
+            return {"error": "Drive integration not configured"}
+        result = await deps.drive.create_doc(title=title)
+        return result or {"error": "Failed to create document"}
+
+    # ── Google Tasks ───────────────────────────────────────────────────────
+
+    async def list_google_tasks(show_completed: bool = False) -> list[dict]:
+        """
+        List tasks from Google Tasks (primary task list).
+        These are the founder's personal to-do items managed in Google Tasks.
+
+        Args:
+            show_completed: If True, include completed tasks too
+
+        Returns:
+            List of task dicts with title, notes, status, due date
+        """
+        if not deps.tasks:
+            return [{"error": "Tasks integration not configured"}]
+        tasks = await deps.tasks.get_tasks(show_completed=show_completed)
+        return [t.to_dict() for t in tasks]
+
+    async def create_google_task(
+        title: str,
+        notes: str = "",
+        due: str = "",
+    ) -> dict:
+        """
+        Create a new task in Google Tasks.
+
+        Args:
+            title: Task title (e.g. "Follow up with investor")
+            notes: Optional description or context
+            due: Optional due date (RFC 3339 format, e.g. "2025-03-20T00:00:00Z")
+
+        Returns:
+            Created task dict or error
+        """
+        if not deps.tasks:
+            return {"error": "Tasks integration not configured"}
+        task = await deps.tasks.create_task(title=title, notes=notes, due=due)
+        return task.to_dict() if task else {"error": "Failed to create task"}
+
+    async def complete_google_task(task_id: str) -> dict:
+        """
+        Mark a Google Task as completed.
+
+        Args:
+            task_id: The task ID to complete
+
+        Returns:
+            {"ok": true} on success
+        """
+        if not deps.tasks:
+            return {"error": "Tasks integration not configured"}
+        success = await deps.tasks.complete_task(task_id=task_id)
+        return {"ok": success}
+
+    async def get_google_task_lists() -> list[dict]:
+        """
+        List all task lists (e.g. "My Tasks", "Work", "Personal").
+
+        Returns:
+            List of task list dicts with id and title
+        """
+        if not deps.tasks:
+            return [{"error": "Tasks integration not configured"}]
+        task_lists = await deps.tasks.get_task_lists()
+        return [tl.to_dict() for tl in task_lists]
+
+    # ── Google Contacts ────────────────────────────────────────────────────
+
+    async def search_contacts(query: str, max_results: int = 10) -> list[dict]:
+        """
+        Search Google Contacts by name, email, or phone number.
+        Useful for looking up investor emails, team member info, etc.
+
+        Args:
+            query: Search string (e.g. "John Smith", "sequoia", "+1555")
+            max_results: Max results to return
+
+        Returns:
+            List of contact dicts with name, emails, phones, organization
+        """
+        if not deps.contacts:
+            return [{"error": "Contacts integration not configured"}]
+        contacts = await deps.contacts.search_contacts(query=query, max_results=max_results)
+        return [c.to_dict() for c in contacts]
+
+    async def get_contact_info(email: str) -> dict:
+        """
+        Look up a contact by their email address.
+        Returns name, organization, phone numbers, and other details.
+
+        Args:
+            email: Email address to look up
+
+        Returns:
+            Contact dict or not_found
+        """
+        if not deps.contacts:
+            return {"error": "Contacts integration not configured"}
+        contact = await deps.contacts.get_contact_by_email(email=email)
+        if contact:
+            return contact.to_dict()
+        return {"not_found": True, "email": email}
+
+    async def list_all_contacts(max_results: int = 50) -> list[dict]:
+        """
+        List all contacts, sorted by most recently updated.
+
+        Args:
+            max_results: Max contacts to return
+
+        Returns:
+            List of contact dicts
+        """
+        if not deps.contacts:
+            return [{"error": "Contacts integration not configured"}]
+        contacts = await deps.contacts.list_contacts(max_results=max_results)
+        return [c.to_dict() for c in contacts]
+
+    # ── Long-Term Memory (ADK Memory Service) ────────────────────────────
+
+    async def recall_memory(query: str) -> list[dict]:
+        """
+        Search long-term memory for past conversations, facts, and episodes
+        related to a query. Use this when the user says things like:
+        "what did we discuss last time?", "do you remember...?",
+        "what did I say about...?"
+
+        Args:
+            query: Natural language search (e.g. "investor meetings", "hiring plans")
+
+        Returns:
+            List of memory entries with content and timestamps
+        """
+        if not deps.memory_service:
+            return [{"info": "Long-term memory not configured"}]
+        try:
+            from google.adk.memory.base_memory_service import SearchMemoryResponse
+            response = await deps.memory_service.search_memory(
+                app_name=deps.app_name, user_id=deps.founder_id, query=query
+            )
+            results = []
+            for entry in (response.memories or []):
+                text = ""
+                if entry.content and entry.content.parts:
+                    text = " ".join(
+                        p.text for p in entry.content.parts if hasattr(p, "text") and p.text
+                    )
+                results.append({
+                    "content": text[:600],
+                    "author": getattr(entry, "author", ""),
+                    "timestamp": getattr(entry, "timestamp", ""),
+                })
+            return results if results else [{"info": "No matching memories found"}]
+        except Exception as e:
+            return [{"error": f"Memory search failed: {e}"}]
+
+    async def save_memory_note(note: str, category: str = "general") -> dict:
+        """
+        Explicitly save a fact or note to long-term memory.
+        Use when the user says "remember this", "note that down",
+        or shares important information worth persisting.
+
+        Args:
+            note: The fact or note to remember (e.g. "Series A target is $5M")
+            category: One of: preference, personal, business, contact, goal, general
+
+        Returns:
+            {"ok": true} on success
+        """
+        if not deps.memory_service:
+            return {"error": "Long-term memory not configured"}
+        try:
+            import time, hashlib
+            from datetime import datetime, timezone
+            db = deps.memory_service._get_db()
+            user_key = f"{deps.app_name}__{deps.founder_id}".replace("/", "_").replace(" ", "_")
+            facts_ref = (
+                db.collection(deps.memory_service.MEMORIES_COLLECTION)
+                .document(user_key)
+                .collection(deps.memory_service.FACTS_SUBCOLLECTION)
+            )
+            fact_hash = hashlib.md5(note.encode()).hexdigest()[:12]
+            doc_ref = facts_ref.document(fact_hash)
+            await asyncio.to_thread(doc_ref.set, {
+                "fact": note,
+                "category": category,
+                "source_session": "voice_explicit",
+                "timestamp": time.time(),
+                "ts_human": datetime.now(timezone.utc).isoformat(),
+            })
+            deps.cache.invalidate("known_facts")  # invalidate facts cache
+            return {"ok": True, "saved": note[:100]}
+        except Exception as e:
+            return {"error": f"Failed to save note: {e}"}
+
+    async def get_past_conversations(topic: str = "", limit: int = 5) -> list[dict]:
+        """
+        Retrieve recent conversation episode summaries from memory.
+        Shows what was discussed in past sessions including decisions,
+        action items, and topics.
+
+        Args:
+            topic: Optional topic filter (e.g. "fundraising", "hiring")
+            limit: Max episodes to return (default 5)
+
+        Returns:
+            List of episode dicts with summary, topics, decisions, action_items
+        """
+        if not deps.memory_service:
+            return [{"info": "Long-term memory not configured"}]
+        try:
+            import re as _re
+            db = deps.memory_service._get_db()
+            user_key = f"{deps.app_name}__{deps.founder_id}".replace("/", "_").replace(" ", "_")
+            episodes_ref = (
+                db.collection(deps.memory_service.MEMORIES_COLLECTION)
+                .document(user_key)
+                .collection(deps.memory_service.EPISODES_SUBCOLLECTION)
+            )
+            docs = await asyncio.to_thread(
+                lambda: list(
+                    episodes_ref
+                    .order_by("timestamp", direction="DESCENDING")
+                    .limit(limit * 3)  # fetch extra for filtering
+                    .stream()
+                )
+            )
+
+            results = []
+            topic_words = set(_re.findall(r"[A-Za-z]+", topic.lower())) if topic else set()
+
+            for doc in docs:
+                data = doc.to_dict()
+                if topic_words:
+                    searchable = " ".join([
+                        data.get("summary", ""),
+                        " ".join(data.get("topics", [])),
+                    ]).lower()
+                    episode_words = set(_re.findall(r"[A-Za-z]+", searchable))
+                    if not (topic_words & episode_words):
+                        continue
+
+                results.append({
+                    "date": data.get("ts_human", "")[:10],
+                    "summary": data.get("summary", ""),
+                    "topics": data.get("topics", []),
+                    "decisions": data.get("decisions", []),
+                    "action_items": data.get("action_items", []),
+                    "people_mentioned": data.get("people_mentioned", []),
+                    "mood": data.get("mood", ""),
+                })
+                if len(results) >= limit:
+                    break
+
+            return results if results else [{"info": "No past conversations found"}]
+        except Exception as e:
+            return [{"error": f"Failed to retrieve episodes: {e}"}]
+
+    async def get_known_facts() -> list[dict]:
+        """
+        Retrieve all known facts and preferences about the founder
+        from long-term memory. Useful for understanding what Astra
+        already knows about the user.
+
+        Returns:
+            List of fact dicts with fact text and category
+        """
+        if not deps.memory_service:
+            return [{"info": "Long-term memory not configured"}]
+        cached = deps.cache.get("known_facts")
+        if cached is not None:
+            return cached
+        try:
+            db = deps.memory_service._get_db()
+            user_key = f"{deps.app_name}__{deps.founder_id}".replace("/", "_").replace(" ", "_")
+            facts_ref = (
+                db.collection(deps.memory_service.MEMORIES_COLLECTION)
+                .document(user_key)
+                .collection(deps.memory_service.FACTS_SUBCOLLECTION)
+            )
+            docs = await asyncio.to_thread(
+                lambda: list(facts_ref.order_by("timestamp", direction="DESCENDING").limit(30).stream())
+            )
+            results = []
+            for doc in docs:
+                data = doc.to_dict()
+                results.append({
+                    "fact": data.get("fact", ""),
+                    "category": data.get("category", "general"),
+                    "when": data.get("ts_human", "")[:10],
+                })
+            result = results if results else [{"info": "No facts stored yet"}]
+            deps.cache.put("known_facts", result, ttl=90)
+            return result
+        except Exception as e:
+            return [{"error": f"Failed to retrieve facts: {e}"}]
+
     # ── Company Context ───────────────────────────────────────────────────
 
     async def get_company_context() -> dict:
@@ -489,16 +1054,21 @@ def build_tools(deps: ToolDeps) -> dict:
         Returns:
             Dict with company_name, context summary, team_members list
         """
+        cached = deps.cache.get("company_context")
+        if cached is not None:
+            return cached
         profile = await deps.store.get_founder(deps.founder_id)
         if not profile:
             return {"error": "Founder profile not found"}
-        return {
+        result = {
             "name":            profile.name,
             "company_name":    profile.company_name,
             "company_context": profile.company_context,
             "team_members":    profile.team_members,
             "timezone":        profile.timezone,
         }
+        deps.cache.put("company_context", result, ttl=300)  # 5 min — rarely changes
+        return result
 
     async def get_brain_summary() -> dict:
         """
@@ -508,6 +1078,10 @@ def build_tools(deps: ToolDeps) -> dict:
         Returns:
             Summary dict with counts and top-level signals
         """
+        cached = deps.cache.get("brain_summary")
+        if cached is not None:
+            return cached
+
         active_insights, at_risk, open_tasks, pending_alerts = await asyncio.gather(
             deps.store.get_active_insights(deps.founder_id, limit=100),
             deps.store.get_at_risk_relationships(deps.founder_id, threshold=0.5),
@@ -521,7 +1095,7 @@ def build_tools(deps: ToolDeps) -> dict:
         for i in active_insights:
             type_counts[i.type.value] = type_counts.get(i.type.value, 0) + 1
 
-        return {
+        result = {
             "total_active_insights":   len(active_insights),
             "insight_breakdown":       type_counts,
             "overdue_commitments":     len(overdue),
@@ -529,6 +1103,8 @@ def build_tools(deps: ToolDeps) -> dict:
             "open_tasks":              len(open_tasks),
             "pending_alerts":          len(pending_alerts),
         }
+        deps.cache.put("brain_summary", result, ttl=60)
+        return result
 
     # ── Return all tools as a name → function mapping ─────────────────────
 
@@ -544,7 +1120,7 @@ def build_tools(deps: ToolDeps) -> dict:
         "get_relationship_health":  get_relationship_health,
         "get_at_risk_relationships": get_at_risk_relationships,
         "get_all_relationships":    get_all_relationships,
-        # Tasks
+        # Brain Tasks
         "get_open_tasks":           get_open_tasks,
         "mark_task_done":           mark_task_done,
         "mark_task_blocked":        mark_task_blocked,
@@ -557,10 +1133,35 @@ def build_tools(deps: ToolDeps) -> dict:
         "get_email_thread":         get_email_thread,
         "send_email":               send_email,
         "reply_to_email":           reply_to_email,
+        "search_emails":            search_emails,
+        "get_emails_from_sender":   get_emails_from_sender,
+        "get_unread_email_count":   get_unread_email_count,
         # Calendar
         "get_upcoming_meetings":    get_upcoming_meetings,
         "get_todays_schedule":      get_todays_schedule,
         "get_meeting_with_contact": get_meeting_with_contact,
+        "create_calendar_event":    create_calendar_event,
+        "quick_schedule":           quick_schedule,
+        # Google Drive
+        "search_drive":             search_drive,
+        "list_recent_drive_files":  list_recent_drive_files,
+        "search_drive_by_type":     search_drive_by_type,
+        "get_drive_file_info":      get_drive_file_info,
+        "create_google_doc":        create_google_doc,
+        # Google Tasks
+        "list_google_tasks":        list_google_tasks,
+        "create_google_task":       create_google_task,
+        "complete_google_task":     complete_google_task,
+        "get_google_task_lists":    get_google_task_lists,
+        # Google Contacts
+        "search_contacts":          search_contacts,
+        "get_contact_info":         get_contact_info,
+        "list_all_contacts":        list_all_contacts,
+        # Long-Term Memory
+        "recall_memory":            recall_memory,
+        "save_memory_note":         save_memory_note,
+        "get_past_conversations":   get_past_conversations,
+        "get_known_facts":          get_known_facts,
         # Company
         "get_company_context":      get_company_context,
         "get_brain_summary":        get_brain_summary,
