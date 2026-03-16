@@ -271,6 +271,14 @@ export default function GeminiAvatar({
       : state === 'speaking' ? 'rgba(79,125,255,0.6)'
         : 'rgba(79,125,255,0.2)'
 
+  // ── Idle breathing animation ──────────────────────────────────────────
+  const idleBreathingKeyframes = `
+    @keyframes idleBreathing {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.02); }
+    }
+  `
+
   const isPortraitMode = !!(base64Image && portraitReady)
   // In fullScreen mode, we ignore fixed constants and tell the component to fill its parent.
   // The sizing is handled by CSS (width:100% height:100%) and internal canvas resize logic.
@@ -282,6 +290,24 @@ export default function GeminiAvatar({
       ...styles.wrapper,
       ...(fullScreen ? { width: '100%', height: '100%', marginBottom: 0 } : { width: SIZE, height: SIZE + 90 })
     }}>
+      <style>{`
+        @keyframes idleBreathing {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.02); }
+        }
+        @keyframes thinkingPulse {
+          0% { opacity: 0.2; }
+          50% { opacity: 0.6; }
+          100% { opacity: 0.2; }
+        }
+        @keyframes orbitSpin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .thinkingOrbWrapper {
+          animation: thinkingPulse 2s ease-in-out infinite;
+        }
+      `}</style>
 
       {/* ── FFT-driven rings (both modes) ── */}
       <div ref={ring3Ref} style={{ ...styles.ring, width: SIZE + 80, height: SIZE + 80, opacity: 0 }} />
@@ -303,7 +329,8 @@ export default function GeminiAvatar({
               ? { width: '100%', height: '100%', borderRadius: 0, border: 'none' }
               : { width: SIZE, height: SIZE, borderRadius: '50%' }),
             boxShadow: fullScreen ? 'none' : `0 0 40px ${glowColor}, 0 0 80px ${glowColor.replace(/[\d.]+\)$/, v => (parseFloat(v) * 0.4).toFixed(2) + ')')}`,
-            transition: 'box-shadow 0.3s ease',
+            transition: 'box-shadow 0.4s ease, transform 3s ease-in-out',
+            animation: state === 'idle' ? 'idleBreathing 3s ease-in-out infinite' : 'none',
           }}
         >
           <canvas
@@ -347,7 +374,8 @@ export default function GeminiAvatar({
             ...styles.face,
             width: SIZE, height: SIZE,
             boxShadow: `0 0 40px ${glowColor}, 0 0 80px ${glowColor.replace(/[\d.]+\)$/, v => (parseFloat(v) * 0.4).toFixed(2) + ')')}`,
-            transition: 'box-shadow 0.3s ease',
+            transition: 'box-shadow 0.4s ease, transform 3s ease-in-out',
+            animation: state === 'idle' ? 'idleBreathing 3s ease-in-out infinite' : 'none',
           }}
         >
           <svg width="100" height="100" viewBox="0 0 100 100" style={styles.svg}>
@@ -458,11 +486,14 @@ function _drawPortrait(canvas, img, amp, energy, curState, fullScreen) {
     ctx.clip()
   }
 
-  // Fill background
+  // Fill background with optional brightness modulation
   if (fullScreen) {
     ctx.clearRect(0, 0, CW, CH)
   } else {
-    ctx.fillStyle = '#0f0f17'
+    // Modulate background brightness based on audio energy
+    const bgBrightness = 0.90 + (energy * 0.3)  // 0.9 base + energy boost (0-0.3)
+    const bgHue = Math.round(15 * (1 - energy * 0.15))  // Slight warmth with energy
+    ctx.fillStyle = `hsl(${bgHue}, 3%, ${bgBrightness * 100}%)`
     ctx.fillRect(0, 0, CW, CH)
   }
 
@@ -572,7 +603,7 @@ const styles = {
     border: '1.5px solid rgba(59, 130, 246, 0.4)', // Softer blue for light theme
     transform: 'translate(-50%, -50%)',
     pointerEvents: 'none',
-    // No CSS transition — driven by RAF for zero-lag
+    transition: 'all 0.4s ease',  // Smooth state color transitions
     marginTop: -45,   // offset for the name row below the avatar
   },
   // Portrait mode container — wraps canvas, provides border-radius + glow
@@ -606,19 +637,22 @@ const styles = {
     width: 12, height: 12,
     borderRadius: '50%',
     border: '2px solid rgba(255,255,255,0.2)',
-    transition: 'background 0.3s ease, box-shadow 0.3s ease',
+    transition: 'all 0.4s ease',  // Smooth transitions for state changes
   },
   // Thinking orbit overlay for portrait mode
   thinkingOrbitWrap: {
     position: 'absolute', inset: 0,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     pointerEvents: 'none',
+    borderRadius: '50%',
+    border: '2px solid rgba(168,85,247,0.2)',
+    animation: 'thinkingPulse 2s ease-in-out infinite',
   },
   thinkingOrbit: {
     width: 8, height: 8,
     borderRadius: '50%',
     background: 'rgba(168,85,247,0.9)',
-    boxShadow: '0 0 10px rgba(168,85,247,0.7)',
+    boxShadow: '0 0 10px rgba(168,85,247,0.7), inset 0 0 10px rgba(168,85,247,0.4)',
     animation: 'orbitSpin 1.5s linear infinite',
     transformOrigin: '0px -75px',
     marginTop: -75,

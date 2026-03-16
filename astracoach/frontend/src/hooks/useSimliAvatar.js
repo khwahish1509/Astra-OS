@@ -70,7 +70,16 @@ async function fetchSimliSessionToken(apiKey, faceId, maxSessionLength = 3600, m
   const bodyText = await res.text()
   console.log('[Simli] Token API response:', res.status, bodyText.substring(0, 300))
 
+  // Simli sometimes returns 402 but STILL includes a valid session_token
+  // (e.g. after upgrading mid-session). Try to parse before throwing.
   if (!res.ok) {
+    try {
+      const parsed = JSON.parse(bodyText)
+      if (parsed?.session_token) {
+        console.warn(`[Simli] Token API returned ${res.status} but included session_token — using it`)
+        return parsed.session_token
+      }
+    } catch { /* not JSON, fall through to throw */ }
     throw new Error(`Simli /compose/token failed (HTTP ${res.status}): ${bodyText}`)
   }
 
@@ -348,6 +357,8 @@ export function useSimliAvatar({ apiKey, faceId, onConnected, onDisconnected }) 
       setError(msg)
       setIsLoading(false)
       setIsConnected(false)
+      // Reset one-shot guard so user can retry after fixing credits/config
+      hasAttemptedRef.current = false
       const client = clientRef.current
       clientRef.current = null
       if (client) { try { await client.stop() } catch { /* ignore */ } }

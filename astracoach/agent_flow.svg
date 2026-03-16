@@ -1,0 +1,373 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" font-family="'SF Pro Display', 'Inter', -apple-system, sans-serif">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0e1a"/>
+      <stop offset="100%" style="stop-color:#111827"/>
+    </linearGradient>
+    <linearGradient id="voiceGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="emailGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="100%" style="stop-color:#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="riskGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#ef4444"/>
+    </linearGradient>
+    <linearGradient id="brainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#10b981"/>
+      <stop offset="100%" style="stop-color:#059669"/>
+    </linearGradient>
+    <linearGradient id="gmailGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ea4335"/>
+      <stop offset="100%" style="stop-color:#fbbc05"/>
+    </linearGradient>
+    <linearGradient id="arrowGrad1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="100%" style="stop-color:#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="arrowGrad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#10b981"/>
+      <stop offset="100%" style="stop-color:#6366f1"/>
+    </linearGradient>
+    <linearGradient id="arrowGrad3" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#ef4444"/>
+    </linearGradient>
+    <linearGradient id="arrowGrad4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+
+    <!-- Glows -->
+    <filter id="glowVoice" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feFlood flood-color="#8b5cf6" flood-opacity="0.3"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowEmail" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feFlood flood-color="#3b82f6" flood-opacity="0.25"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowRisk" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feFlood flood-color="#f59e0b" flood-opacity="0.25"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowBrain" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feFlood flood-color="#10b981" flood-opacity="0.25"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feFlood flood-color="#000" flood-opacity="0.4"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- Arrow markers -->
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#06b6d4"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#8b5cf6"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="800" fill="url(#bgGrad)"/>
+
+  <!-- Subtle grid -->
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5" opacity="0.4"/>
+  </pattern>
+  <rect width="1200" height="800" fill="url(#grid)"/>
+
+  <!-- Title -->
+  <text x="600" y="42" text-anchor="middle" fill="#e2e8f0" font-size="22" font-weight="700" letter-spacing="1">ASTRA OS — MULTI-AGENT INTELLIGENCE PIPELINE</text>
+  <text x="600" y="64" text-anchor="middle" fill="#64748b" font-size="12" letter-spacing="2">AUTONOMOUS EMAIL → INSIGHT → ALERT → VOICE SURFACING</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- ROW 1: TRIGGER SOURCE (Gmail)              -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <!-- Gmail Inbox -->
+  <g filter="url(#softShadow)">
+    <rect x="60" y="110" width="200" height="90" rx="12" fill="#1a1f2e" stroke="#ea4335" stroke-width="1.5"/>
+    <rect x="60" y="110" width="200" height="28" rx="12" fill="url(#gmailGrad)" opacity="0.15"/>
+    <text x="100" y="130" fill="#ea4335" font-size="11" font-weight="600" letter-spacing="1">GMAIL INBOX</text>
+    <text x="80" y="155" fill="#94a3b8" font-size="11">New emails arrive</text>
+    <text x="80" y="172" fill="#64748b" font-size="10">Scanned every 15 min</text>
+    <!-- Mail icon -->
+    <rect x="72" y="118" width="16" height="12" rx="2" fill="none" stroke="#ea4335" stroke-width="1.2"/>
+    <polyline points="72,120 80,126 88,120" fill="none" stroke="#ea4335" stroke-width="1"/>
+  </g>
+
+  <!-- Arrow: Gmail → EmailScanner -->
+  <line x1="260" y1="155" x2="340" y2="155" stroke="#06b6d4" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrowBlue)"/>
+  <text x="300" y="145" text-anchor="middle" fill="#06b6d4" font-size="9" font-weight="500">POLL</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- ROW 1: EMAIL SCANNER AGENT                 -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <g filter="url(#glowEmail)">
+    <rect x="350" y="95" width="260" height="120" rx="14" fill="#1a1f2e" stroke="#3b82f6" stroke-width="1.8"/>
+    <rect x="350" y="95" width="260" height="32" rx="14" fill="url(#emailGrad)" opacity="0.12"/>
+    <!-- Agent badge -->
+    <rect x="365" y="85" width="80" height="20" rx="10" fill="#3b82f6"/>
+    <text x="405" y="99" text-anchor="middle" fill="#fff" font-size="9" font-weight="700">AGENT 2</text>
+
+    <text x="380" y="118" fill="#60a5fa" font-size="13" font-weight="700">EmailScannerAgent</text>
+    <text x="380" y="137" fill="#94a3b8" font-size="10">Gemini 2.0 Flash</text>
+
+    <!-- Process steps -->
+    <text x="370" y="160" fill="#cbd5e1" font-size="10">1. Parse email content</text>
+    <text x="370" y="175" fill="#cbd5e1" font-size="10">2. Extract commitments &amp; risks</text>
+    <text x="370" y="190" fill="#cbd5e1" font-size="10">3. Classify urgency &amp; sentiment</text>
+    <text x="370" y="205" fill="#cbd5e1" font-size="10">4. Update relationship scores</text>
+  </g>
+
+  <!-- Arrow: EmailScanner → Firestore (down) -->
+  <line x1="480" y1="215" x2="480" y2="310" stroke="#10b981" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <text x="490" y="265" fill="#10b981" font-size="9" font-weight="500">EMBED</text>
+  <text x="490" y="277" fill="#10b981" font-size="9" font-weight="500">&amp; STORE</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- ROW 2: COMPANY BRAIN (Firestore)           -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <g filter="url(#glowBrain)">
+    <rect x="310" y="320" width="340" height="140" rx="14" fill="#1a1f2e" stroke="#10b981" stroke-width="1.8"/>
+    <rect x="310" y="320" width="340" height="32" rx="14" fill="url(#brainGrad)" opacity="0.1"/>
+
+    <!-- Brain icon -->
+    <circle cx="340" cy="336" r="8" fill="none" stroke="#10b981" stroke-width="1.2"/>
+    <path d="M334,336 Q337,330 340,336 Q343,330 346,336" fill="none" stroke="#10b981" stroke-width="1"/>
+
+    <text x="355" y="341" fill="#34d399" font-size="14" font-weight="700">Company Brain</text>
+    <text x="520" y="341" fill="#64748b" font-size="10">Firestore + Vector Search</text>
+
+    <!-- Data types as pills -->
+    <rect x="325" y="358" width="85" height="22" rx="11" fill="#10b981" opacity="0.15" stroke="#10b981" stroke-width="0.8"/>
+    <text x="367" y="373" text-anchor="middle" fill="#34d399" font-size="9" font-weight="600">Commitments</text>
+
+    <rect x="420" y="358" width="55" height="22" rx="11" fill="#10b981" opacity="0.15" stroke="#10b981" stroke-width="0.8"/>
+    <text x="447" y="373" text-anchor="middle" fill="#34d399" font-size="9" font-weight="600">Risks</text>
+
+    <rect x="485" y="358" width="70" height="22" rx="11" fill="#10b981" opacity="0.15" stroke="#10b981" stroke-width="0.8"/>
+    <text x="520" y="373" text-anchor="middle" fill="#34d399" font-size="9" font-weight="600">Decisions</text>
+
+    <rect x="565" y="358" width="70" height="22" rx="11" fill="#10b981" opacity="0.15" stroke="#10b981" stroke-width="0.8"/>
+    <text x="600" y="373" text-anchor="middle" fill="#34d399" font-size="9" font-weight="600">Insights</text>
+
+    <!-- Vector details -->
+    <text x="330" y="405" fill="#94a3b8" font-size="10">text-embedding-004 · 768 dimensions · cosine similarity</text>
+    <text x="330" y="422" fill="#64748b" font-size="10">Semantic search across all past conversations &amp; emails</text>
+
+    <!-- Relationship scores -->
+    <rect x="325" y="435" width="310" height="18" rx="4" fill="#10b981" opacity="0.08"/>
+    <text x="335" y="448" fill="#6ee7b7" font-size="9">Relationship Health: Paras 92% · Sarah 78% · Riya 88% · Alex 45%</text>
+  </g>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- ROW 2: RISK MONITOR AGENT (right side)     -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <!-- Arrow: Firestore → RiskMonitor -->
+  <line x1="650" y1="390" x2="730" y2="390" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrowOrange)"/>
+  <text x="690" y="382" text-anchor="middle" fill="#f59e0b" font-size="9" font-weight="500">QUERY</text>
+
+  <g filter="url(#glowRisk)">
+    <rect x="740" y="310" width="240" height="140" rx="14" fill="#1a1f2e" stroke="#f59e0b" stroke-width="1.8"/>
+    <rect x="740" y="310" width="240" height="32" rx="14" fill="url(#riskGrad)" opacity="0.1"/>
+    <!-- Agent badge -->
+    <rect x="755" y="300" width="80" height="20" rx="10" fill="#f59e0b"/>
+    <text x="795" y="314" text-anchor="middle" fill="#1a1f2e" font-size="9" font-weight="700">AGENT 3</text>
+
+    <text x="770" y="337" fill="#fbbf24" font-size="13" font-weight="700">RiskMonitorAgent</text>
+    <text x="770" y="356" fill="#94a3b8" font-size="10">Runs every 30 minutes</text>
+
+    <!-- Check items -->
+    <text x="760" y="380" fill="#cbd5e1" font-size="10">&#x2713; Overdue commitments</text>
+    <text x="760" y="396" fill="#cbd5e1" font-size="10">&#x2713; Declining relationships (&lt;0.4)</text>
+    <text x="760" y="412" fill="#cbd5e1" font-size="10">&#x2713; Tasks blocked &gt;24 hours</text>
+    <text x="760" y="428" fill="#cbd5e1" font-size="10">&#x2713; Missed follow-ups</text>
+    <text x="760" y="444" fill="#cbd5e1" font-size="10">&#x2713; Sprint velocity drops</text>
+  </g>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- ROW 3: ALERT QUEUE                         -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <!-- Arrow: RiskMonitor → Alert Queue -->
+  <line x1="860" y1="450" x2="860" y2="520" stroke="#ef4444" stroke-width="2" marker-end="url(#arrowRed)"/>
+  <text x="875" y="490" fill="#ef4444" font-size="9" font-weight="500">CREATE</text>
+
+  <g filter="url(#softShadow)">
+    <rect x="720" y="530" width="280" height="80" rx="12" fill="#1a1f2e" stroke="#ef4444" stroke-width="1.5"/>
+    <rect x="720" y="530" width="280" height="26" rx="12" fill="#ef4444" opacity="0.1"/>
+    <text x="750" y="549" fill="#f87171" font-size="12" font-weight="700">Alert Queue</text>
+    <text x="900" y="549" fill="#64748b" font-size="10">Priority-sorted</text>
+
+    <!-- Alert examples -->
+    <rect x="735" y="562" width="10" height="10" rx="2" fill="#ef4444"/>
+    <text x="752" y="572" fill="#fca5a5" font-size="9">CRITICAL: Financials overdue for Sarah Chen (2d)</text>
+
+    <rect x="735" y="580" width="10" height="10" rx="2" fill="#f59e0b"/>
+    <text x="752" y="590" fill="#fde68a" font-size="9">HIGH: Alex Thompson relationship declining (45%)</text>
+
+    <rect x="735" y="598" width="10" height="10" rx="2" fill="#3b82f6"/>
+    <text x="752" y="608" fill="#93c5fd" font-size="9">MEDIUM: Sprint velocity dropped 20%</text>
+  </g>
+
+  <!-- Arrow: Alert Queue → VoiceAgent -->
+  <line x1="720" y1="570" x2="480" y2="570" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrowPurple)"/>
+  <text x="600" y="562" text-anchor="middle" fill="#8b5cf6" font-size="9" font-weight="500">INJECT INTO NEXT SESSION</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- ROW 3: VOICE AGENT (primary)               -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <g filter="url(#glowVoice)">
+    <rect x="80" y="510" width="390" height="170" rx="16" fill="#1a1f2e" stroke="#8b5cf6" stroke-width="2"/>
+    <rect x="80" y="510" width="390" height="36" rx="16" fill="url(#voiceGrad)" opacity="0.12"/>
+    <!-- Agent badge -->
+    <rect x="95" y="498" width="100" height="22" rx="11" fill="#6366f1"/>
+    <text x="145" y="513" text-anchor="middle" fill="#fff" font-size="10" font-weight="700">PRIMARY</text>
+
+    <!-- Mic icon -->
+    <rect x="107" y="524" width="10" height="14" rx="5" fill="none" stroke="#a78bfa" stroke-width="1.2"/>
+    <path d="M103,534 Q112,542 121,534" fill="none" stroke="#a78bfa" stroke-width="1.2"/>
+    <line x1="112" y1="542" x2="112" y2="546" stroke="#a78bfa" stroke-width="1.2"/>
+
+    <text x="127" y="536" fill="#a78bfa" font-size="15" font-weight="700">VoiceAgent</text>
+    <text x="280" y="536" fill="#94a3b8" font-size="10">Gemini 2.5 Flash Native Audio</text>
+
+    <!-- Features -->
+    <text x="100" y="564" fill="#cbd5e1" font-size="10">Real-time bidirectional PCM streaming (16kHz in / 24kHz out)</text>
+    <text x="100" y="582" fill="#cbd5e1" font-size="10">51 FunctionTools via Google ADK</text>
+    <text x="100" y="600" fill="#cbd5e1" font-size="10">Native Voice Activity Detection (barge-in)</text>
+    <text x="100" y="618" fill="#cbd5e1" font-size="10">Polls alert queue every 60s during live session</text>
+
+    <!-- Tool pills row -->
+    <rect x="100" y="632" width="68" height="18" rx="9" fill="#6366f1" opacity="0.2" stroke="#6366f1" stroke-width="0.7"/>
+    <text x="134" y="644" text-anchor="middle" fill="#a78bfa" font-size="8" font-weight="600">get_emails</text>
+
+    <rect x="176" y="632" width="78" height="18" rx="9" fill="#6366f1" opacity="0.2" stroke="#6366f1" stroke-width="0.7"/>
+    <text x="215" y="644" text-anchor="middle" fill="#a78bfa" font-size="8" font-weight="600">recall_memory</text>
+
+    <rect x="262" y="632" width="72" height="18" rx="9" fill="#6366f1" opacity="0.2" stroke="#6366f1" stroke-width="0.7"/>
+    <text x="298" y="644" text-anchor="middle" fill="#a78bfa" font-size="8" font-weight="600">create_task</text>
+
+    <rect x="342" y="632" width="58" height="18" rx="9" fill="#6366f1" opacity="0.2" stroke="#6366f1" stroke-width="0.7"/>
+    <text x="371" y="644" text-anchor="middle" fill="#a78bfa" font-size="8" font-weight="600">+48 more</text>
+
+    <!-- Connection to brain -->
+  </g>
+
+  <!-- Arrow: VoiceAgent ↔ Brain -->
+  <path d="M275,510 L275,460" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowPurple)" stroke-dasharray="4,3"/>
+  <path d="M295,460 L295,510" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowGreen)" stroke-dasharray="4,3"/>
+  <text x="250" y="488" fill="#94a3b8" font-size="8">recall</text>
+  <text x="302" y="488" fill="#94a3b8" font-size="8">store</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- FOUNDER (bottom left)                      -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <!-- Arrow: Founder ↔ VoiceAgent -->
+  <g>
+    <rect x="100" y="720" width="180" height="55" rx="12" fill="#1a1f2e" stroke="#6366f1" stroke-width="1.2"/>
+    <!-- Person icon -->
+    <circle cx="125" cy="740" r="8" fill="none" stroke="#a78bfa" stroke-width="1.2"/>
+    <path d="M113,758 Q125,750 137,758" fill="none" stroke="#a78bfa" stroke-width="1.2"/>
+    <text x="140" y="744" fill="#e2e8f0" font-size="12" font-weight="600">Founder</text>
+    <text x="120" y="764" fill="#64748b" font-size="9">"Brief me" · "Reply to Sarah"</text>
+  </g>
+
+  <!-- Bidirectional audio arrows -->
+  <line x1="190" y1="720" x2="190" y2="685" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrowPurple)"/>
+  <line x1="210" y1="685" x2="210" y2="720" stroke="#6366f1" stroke-width="2" marker-end="url(#arrowPurple)"/>
+  <text x="155" y="705" fill="#a78bfa" font-size="8">16kHz PCM</text>
+  <text x="218" y="705" fill="#6366f1" font-size="8">24kHz PCM</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- PROACTIVE BRIEFING EXAMPLE (bottom right)  -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <g>
+    <rect x="550" y="700" width="430" height="75" rx="12" fill="#1a1f2e" stroke="#334155" stroke-width="1"/>
+    <rect x="550" y="700" width="430" height="24" rx="12" fill="#8b5cf6" opacity="0.08"/>
+    <text x="575" y="717" fill="#a78bfa" font-size="10" font-weight="600">EXAMPLE: PROACTIVE MORNING BRIEFING</text>
+
+    <text x="570" y="738" fill="#94a3b8" font-size="9">1. Email arrives from Sarah Chen about Series A timeline</text>
+    <text x="570" y="752" fill="#94a3b8" font-size="9">2. EmailScanner extracts commitment: "Send financials by Friday"</text>
+    <text x="570" y="766" fill="#94a3b8" font-size="9">3. RiskMonitor detects overdue (2 days late) → creates CRITICAL alert</text>
+
+    <!-- Step flow arrows at bottom -->
+    <rect x="575" y="680" width="55" height="16" rx="4" fill="#3b82f6" opacity="0.2"/>
+    <text x="602" y="691" text-anchor="middle" fill="#60a5fa" font-size="8" font-weight="600">Email</text>
+    <text x="637" y="691" fill="#64748b" font-size="10">→</text>
+    <rect x="647" y="680" width="55" height="16" rx="4" fill="#10b981" opacity="0.2"/>
+    <text x="674" y="691" text-anchor="middle" fill="#34d399" font-size="8" font-weight="600">Insight</text>
+    <text x="709" y="691" fill="#64748b" font-size="10">→</text>
+    <rect x="719" y="680" width="55" height="16" rx="4" fill="#f59e0b" opacity="0.2"/>
+    <text x="746" y="691" text-anchor="middle" fill="#fbbf24" font-size="8" font-weight="600">Risk</text>
+    <text x="781" y="691" fill="#64748b" font-size="10">→</text>
+    <rect x="791" y="680" width="55" height="16" rx="4" fill="#ef4444" opacity="0.2"/>
+    <text x="818" y="691" text-anchor="middle" fill="#f87171" font-size="8" font-weight="600">Alert</text>
+    <text x="853" y="691" fill="#64748b" font-size="10">→</text>
+    <rect x="863" y="680" width="100" height="16" rx="4" fill="#8b5cf6" opacity="0.2"/>
+    <text x="913" y="691" text-anchor="middle" fill="#a78bfa" font-size="8" font-weight="600">Voice Briefing</text>
+  </g>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- TIMING LABELS                              -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <!-- Timeline on right edge -->
+  <rect x="1030" y="110" width="140" height="25" rx="6" fill="#3b82f6" opacity="0.1" stroke="#3b82f6" stroke-width="0.8"/>
+  <text x="1100" y="127" text-anchor="middle" fill="#60a5fa" font-size="10" font-weight="600">Every 15 min</text>
+
+  <rect x="1030" y="370" width="140" height="25" rx="6" fill="#f59e0b" opacity="0.1" stroke="#f59e0b" stroke-width="0.8"/>
+  <text x="1100" y="387" text-anchor="middle" fill="#fbbf24" font-size="10" font-weight="600">Every 30 min</text>
+
+  <rect x="1030" y="580" width="140" height="25" rx="6" fill="#8b5cf6" opacity="0.1" stroke="#8b5cf6" stroke-width="0.8"/>
+  <text x="1100" y="597" text-anchor="middle" fill="#a78bfa" font-size="10" font-weight="600">Real-time streaming</text>
+
+  <!-- Dashed lines connecting timing labels -->
+  <line x1="1030" y1="122" x2="610" y2="122" stroke="#3b82f6" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.3"/>
+  <line x1="1030" y1="382" x2="980" y2="382" stroke="#f59e0b" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.3"/>
+  <line x1="1030" y1="592" x2="470" y2="592" stroke="#8b5cf6" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.3"/>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- LEGEND + BRANDING                          -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <!-- "Zero manual input" callout -->
+  <rect x="60" y="280" width="220" height="40" rx="8" fill="#10b981" opacity="0.08" stroke="#10b981" stroke-width="0.8"/>
+  <text x="170" y="298" text-anchor="middle" fill="#34d399" font-size="10" font-weight="700">ZERO MANUAL INPUT</text>
+  <text x="170" y="312" text-anchor="middle" fill="#6ee7b7" font-size="9">System learns &amp; monitors autonomously</text>
+
+  <!-- Bottom branding -->
+  <text x="600" y="790" text-anchor="middle" fill="#334155" font-size="10" letter-spacing="3">ASTRA OS · GEMINI LIVE AGENT CHALLENGE 2025</text>
+</svg>

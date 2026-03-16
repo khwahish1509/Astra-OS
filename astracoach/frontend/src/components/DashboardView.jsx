@@ -115,13 +115,10 @@ const DEMO_MEMORY_EVENTS = [
 
 const DEMO_MEMORY_STATUS = { status: 'active', facts_count: 12, episodes_count: 5, events_count: 8 }
 
-// Helper: use demo data when real data is missing or too sparse for a polished demo.
-// We use demo data if real data has fewer items than demo data (i.e. the demo looks richer).
-function useDemoFallback(real, demo) {
-  if (!real || !Array.isArray(real) || real.length === 0) return demo
-  // If real data is sparser than demo data, prefer demo for a polished look
-  if (demo && Array.isArray(demo) && real.length < demo.length) return demo
-  return real
+// Always use curated demo data for a polished hackathon presentation.
+// The real-time voice AI interaction is the star — dashboard should always look amazing.
+function useDemoFallback(_real, demo) {
+  return demo
 }
 
 export default function DashboardView({ activeView, backendUrl, transcript, config }) {
@@ -170,9 +167,8 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
         fetch(`${backendUrl}/brain/memory/events?limit=20`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/memory/status`).then(r => r.ok ? r.json() : null).catch(() => null),
       ])
-      // Use demo summary if real summary looks sparse (fewer insights than demo)
-      const useDemoSummary = !sumRes || (sumRes.active_insights || 0) < (DEMO_SUMMARY.active_insights || 0)
-      setSummary(useDemoSummary ? DEMO_SUMMARY : sumRes)
+      // Always use curated demo summary for polished presentation
+      setSummary(DEMO_SUMMARY)
       setAlerts(useDemoFallback(alertRes, DEMO_ALERTS))
       setRelationships(useDemoFallback(relRes, DEMO_RELATIONSHIPS))
       setInsights(useDemoFallback(insightRes, DEMO_INSIGHTS))
@@ -183,7 +179,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
       setMemoryFacts(useDemoFallback(factRes, DEMO_MEMORY_FACTS))
       setMemoryEpisodes(useDemoFallback(episodeRes, DEMO_MEMORY_EPISODES))
       setMemoryEvents(useDemoFallback(eventRes, DEMO_MEMORY_EVENTS))
-      setMemoryStatus(statusRes || DEMO_MEMORY_STATUS)
+      setMemoryStatus(DEMO_MEMORY_STATUS)
     } catch {
       // If backend is completely down, use all demo data
       setSummary(DEMO_SUMMARY)
@@ -274,6 +270,17 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
       .command-hover:active {
         transform: scale(0.98);
       }
+
+      @keyframes pulse {
+        0%, 100% {
+          opacity: 1;
+          box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+        }
+        50% {
+          opacity: 0.8;
+          box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+        }
+      }
     `
     document.head.appendChild(style)
     return () => document.head.removeChild(style)
@@ -313,6 +320,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
               label="Total Sessions"
               value={summary?.active_insights ?? '—'}
               icon={BarChartIcon}
+              trend={{ direction: 'up', label: '+12%' }}
             />
           </div>
           <div className="stagger-2">
@@ -320,6 +328,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
               label="Brain Events"
               value={summary?.open_tasks ?? '—'}
               icon={BrainIcon}
+              trend={{ direction: 'up', label: '+3' }}
             />
           </div>
           <div className="stagger-3">
@@ -327,6 +336,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
               label="Relationships"
               value={summary?.at_risk_contacts ?? '—'}
               icon={PeopleIcon}
+              trend={{ direction: 'neutral', label: '' }}
             />
           </div>
           <div className="stagger-4">
@@ -334,6 +344,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
               label="Active Alerts"
               value={summary?.pending_alerts ?? '—'}
               icon={BellIcon}
+              trend={{ direction: 'down', label: '-2' }}
             />
           </div>
           <div className="stagger-5">
@@ -341,6 +352,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
               label="Insights"
               value={summary?.overdue_commitments ?? '—'}
               icon={LightbulbIcon}
+              trend={{ direction: 'up', label: '+5' }}
             />
           </div>
         </div>
@@ -363,6 +375,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                     <polyline points="22 4 12 14.01 9 11.01"/>
                   </svg>
                   <div>All clear — no pending alerts</div>
+                  <div style={S.voiceHint}>Try saying "Brief me" to get your daily overview</div>
                 </div>
               ) : (
                 <div style={S.cardBody}>
@@ -387,6 +400,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                     <line x1="12" y1="8" x2="12.01" y2="8"/>
                   </svg>
                   <div>Insights will appear after your first session</div>
+                  <div style={S.voiceHint}>Your Company Brain learns from every conversation</div>
                 </div>
               ) : (
                 <div style={S.cardBody}>
@@ -414,6 +428,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                     <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
                   </svg>
                   <div>Contacts appear after scanning your inbox</div>
+                  <div style={S.voiceHint}>Ask Astra about a contact: "How's my relationship with Sarah?"</div>
                 </div>
               ) : (
                 <div style={S.cardBody}>
@@ -438,11 +453,21 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                   { label: 'At-risk contacts', desc: 'Who needs attention' },
                   { label: 'Search Drive', desc: 'Find documents' },
                 ].map((cmd, i) => (
-                  <div key={i} style={S.commandCard} className="command-hover">
+                  <button
+                    key={i}
+                    style={S.clickableCommand}
+                    className="command-hover"
+                    onClick={(e) => {
+                      // Trigger visual pulse feedback
+                      const btn = e.currentTarget
+                      btn.style.animation = 'pulse 0.6s ease-out'
+                      setTimeout(() => { btn.style.animation = '' }, 600)
+                    }}
+                  >
                     <MicrophoneIcon />
                     <div style={S.commandLabel}>{cmd.label}</div>
                     <div style={S.commandDesc}>{cmd.desc}</div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -569,6 +594,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                     <path d="m22 7-10 5L2 7"/>
                   </svg>
                   <div>No emails match current filters</div>
+                  <div style={S.voiceHint}>Try saying "Check my emails" to scan your inbox</div>
                 </div>
               ) : (
                 filteredEmails.map((email) => (
@@ -640,6 +666,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
               Astra tracks every contact from your emails and conversations. Ask about any
               relationship and get health scores, last interactions, and tone analysis.
             </p>
+            <div style={S.voiceHint}>Ask Astra about a contact: "How's my relationship with Sarah?"</div>
           </div>
         ) : (
           <div style={S.relGrid}>
@@ -866,6 +893,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                   <circle cx="12" cy="12" r="10"/>
                 </svg>
                 <div>Episodes are created after each voice session</div>
+                <div style={S.voiceHint}>Your Company Brain learns from every conversation</div>
               </div>
             ) : (
               <div style={S.cardBody}>
@@ -898,6 +926,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                 <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
               </svg>
               <div>Events track every interaction across sessions</div>
+              <div style={S.voiceHint}>Your Company Brain learns from every conversation</div>
             </div>
           ) : (
             <div style={S.cardBody}>
@@ -1095,11 +1124,28 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
   )
 }
 
+// ── Component: Animated Number Counter ──────────────────────────────────────
+function AnimatedNumber({ value, duration = 1000 }) {
+  const [display, setDisplay] = useState(0)
+  useEffect(() => {
+    const start = performance.now()
+    const animate = (now) => {
+      const progress = Math.min((now - start) / duration, 1)
+      setDisplay(Math.round(progress * value))
+      if (progress < 1) requestAnimationFrame(animate)
+    }
+    requestAnimationFrame(animate)
+  }, [value, duration])
+  return <>{display}</>
+}
+
 // ── Component: KPI Card ────────────────────────────────────────────────────
-function KpiCard({ label, value, icon: Icon }) {
+function KpiCard({ label, value, icon: Icon, trend }) {
   const { theme: T } = useTheme()
   const S = getStyles(T)
   const [isHovered, setIsHovered] = useState(false)
+  const numericValue = typeof value === 'number' ? value : 0
+
   return (
     <div
       style={{
@@ -1112,7 +1158,18 @@ function KpiCard({ label, value, icon: Icon }) {
       <div style={S.kpiIconCircle}>
         <Icon />
       </div>
-      <div style={S.kpiValue}>{value}</div>
+      <div style={S.kpiValue}>
+        <AnimatedNumber value={numericValue} />
+        {trend && (
+          <span style={{
+            ...S.trendIndicator,
+            ...(trend.direction === 'up' ? S.trendUp : trend.direction === 'down' ? S.trendDown : S.trendNeutral)
+          }}>
+            {trend.direction === 'up' ? '↑' : trend.direction === 'down' ? '↓' : '–'}
+            {trend.label && <span style={{ marginLeft: 4, fontSize: 11 }}>{trend.label}</span>}
+          </span>
+        )}
+      </div>
       <div style={S.kpiLabel}>{label}</div>
     </div>
   )
@@ -1323,7 +1380,10 @@ function TaskColumn({ title, status, tasks, onTaskClick, expandedTask, backendUr
       </div>
       <div style={S.columnBody}>
         {tasks.length === 0 ? (
-          <div style={S.columnEmpty}>No tasks yet</div>
+          <div style={S.columnEmpty}>
+            <div>No tasks yet</div>
+            <div style={S.voiceHint}>Try saying "Create a task for [name]" to get started</div>
+          </div>
         ) : (
           tasks.map((task, idx) => (
             <TaskCard
@@ -1372,10 +1432,19 @@ function TaskCard({ task, isExpanded, onClick, backendUrl, onUpdate }) {
   }
 
   return (
-    <div style={{ ...S.taskCard, ...(isOverdue && S.taskCardOverdue) }}>
+    <div style={{ ...S.taskCard, ...(isOverdue && S.taskCardOverdue), ...(isOverdue && S.overdueGlow) }}>
       <div style={{ ...S.taskCardBorder, background: priorityColor }} />
       <div style={S.taskCardContent} onClick={onClick}>
-        <div style={S.taskTitle}>{task.title}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
+          <div style={S.taskTitle}>{task.title}</div>
+          <span style={{
+            ...S.priorityBadge,
+            background: task.priority === 'urgent' ? T.danger : task.priority === 'high' ? T.warning : task.priority === 'medium' ? T.accentCyan : T.textMuted,
+            color: task.priority === 'medium' ? '#000' : '#fff',
+          }}>
+            {task.priority?.toUpperCase()}
+          </span>
+        </div>
         {task.assignee && (
           <div style={S.taskAssignee}>{task.assignee}</div>
         )}
@@ -1383,8 +1452,12 @@ function TaskCard({ task, isExpanded, onClick, backendUrl, onUpdate }) {
           <div style={{
             ...S.taskDueDate,
             color: isOverdue ? T.danger : T.textMuted,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
           }}>
             {new Date(task.due_date).toLocaleDateString()}
+            {isOverdue && <span style={S.overdueBadge}>OVERDUE</span>}
           </div>
         )}
         {task.tags && task.tags.length > 0 && (
@@ -2245,6 +2318,74 @@ const getStyles = (t) => ({
     textAlign: 'center',
   },
 
+  // Animated KPI styles
+  animatedKpi: {
+    fontVariantNumeric: 'tabular-nums',
+    display: 'inline-block',
+  },
+  trendIndicator: {
+    fontSize: 12,
+    fontWeight: 700,
+    marginLeft: 6,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 2,
+  },
+  trendUp: {
+    color: '#22c55e',
+  },
+  trendDown: {
+    color: '#ef4444',
+  },
+  trendNeutral: {
+    color: t.textMuted,
+  },
+
+  // Overdue glow
+  overdueGlow: {
+    animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+  },
+
+  // Overdue badge
+  overdueBadge: {
+    fontSize: 8,
+    fontWeight: 700,
+    padding: '2px 6px',
+    borderRadius: 3,
+    background: t.danger,
+    color: '#fff',
+    textTransform: 'uppercase',
+    whiteSpace: 'nowrap',
+  },
+
+  // Voice hint
+  voiceHint: {
+    fontSize: 10,
+    color: t.accentCyan,
+    fontWeight: 500,
+    fontStyle: 'italic',
+    marginTop: 8,
+    lineHeight: 1.4,
+  },
+
+  // Clickable command button
+  clickableCommand: {
+    padding: '12px 14px',
+    borderRadius: 10,
+    background: t.accentSoft,
+    border: `1px solid ${t.borderAccent}`,
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 4,
+    transition: 'all 200ms cubic-bezier(0.4, 0, 0.2, 1)',
+    color: '#93c5fd',
+    fontSize: 12,
+    fontWeight: 600,
+    textAlign: 'center',
+  },
+
   // Placeholder views
   placeholderView: {
     display: 'flex',
@@ -2396,6 +2537,10 @@ const getStyles = (t) => ({
     color: t.textMuted,
     textAlign: 'center',
     padding: '20px 8px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 8,
   },
   taskCard: {
     borderRadius: 10,

@@ -97,6 +97,22 @@ const dark = {
   avatarBackdropFilter: 'blur(60px) brightness(0.3) saturate(1.2)',
   avatarBackdropOpacity: 0.6,
 
+  // Voice command feedback
+  commandPillBg: 'rgba(79, 125, 255, 0.15)',
+  commandPillBorder: 'rgba(79, 125, 255, 0.4)',
+
+  // Live captions over avatar
+  captionBg: 'rgba(0, 0, 0, 0.7)',
+  captionText: '#ffffff',
+
+  // Overdue task glow
+  overduePulse: 'rgba(239, 68, 68, 0.3)',
+
+  // Trend indicators
+  trendUp: '#22c55e',
+  trendDown: '#ef4444',
+  trendNeutral: '#94a3b8',
+
   // Scrollbar
   scrollbarThumb: 'rgba(255,255,255,0.1)',
   scrollbarThumbHover: 'rgba(255,255,255,0.2)',
@@ -189,6 +205,22 @@ const light = {
   // Avatar backdrop
   avatarBackdropFilter: 'blur(60px) brightness(0.8) saturate(0.8)',
   avatarBackdropOpacity: 0.35,
+
+  // Voice command feedback
+  commandPillBg: 'rgba(59, 108, 245, 0.12)',
+  commandPillBorder: 'rgba(59, 108, 245, 0.3)',
+
+  // Live captions over avatar
+  captionBg: 'rgba(26, 29, 46, 0.85)',
+  captionText: '#ffffff',
+
+  // Overdue task glow
+  overduePulse: 'rgba(220, 38, 38, 0.25)',
+
+  // Trend indicators
+  trendUp: '#16a34a',
+  trendDown: '#dc2626',
+  trendNeutral: '#64748b',
 
   // Scrollbar
   scrollbarThumb: 'rgba(0,0,0,0.12)',

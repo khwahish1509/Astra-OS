@@ -55,6 +55,7 @@ export default function InterviewRoom({ session, onEnd }) {
   const [activeNav, setActiveNav] = useState('dashboard')
   const [aiPanelCollapsed, setAiPanelCollapsed] = useState(false)
   const [showCam, setShowCam] = useState(true)
+  const [lastCommand, setLastCommand] = useState(null)
 
   const camVideoRef = useRef(null)
   const camStreamRef = useRef(null)
@@ -125,6 +126,16 @@ export default function InterviewRoom({ session, onEnd }) {
   // ── Auto-scroll transcript ──────────────────────────────────────────────
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [iv.transcript.length])
+
+  // ── Voice command visual feedback ────────────────────────────────────────
+  useEffect(() => {
+    const lastEntry = iv.transcript[iv.transcript.length - 1]
+    if (lastEntry && lastEntry.role === 'user') {
+      setLastCommand(lastEntry.text)
+      const timer = setTimeout(() => setLastCommand(null), 4000)
+      return () => clearTimeout(timer)
+    }
   }, [iv.transcript.length])
 
   // ── Start session ───────────────────────────────────────────────────────
@@ -298,7 +309,16 @@ export default function InterviewRoom({ session, onEnd }) {
             <span style={S.topBarTitle}>Astra</span>
           </div>
           <div style={S.topBarCenter}>
-            {iv.activeTool && (
+            {lastCommand && (
+              <div style={{
+                ...S.commandPill,
+                animation: 'commandFadeOut 4s ease-out forwards',
+              }}>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>🎤 You</span>
+                <span style={{ fontSize: 12, marginLeft: 6 }}>{lastCommand.substring(0, 40)}{lastCommand.length > 40 ? '...' : ''}</span>
+              </div>
+            )}
+            {!lastCommand && iv.activeTool && (
               <div style={S.toolBadge}>
                 <span className="spin" style={S.toolSpinIcon}>&#8635;</span>
                 {iv.activeTool.replace(/_/g, ' ')}
@@ -375,12 +395,11 @@ export default function InterviewRoom({ session, onEnd }) {
                       base64Image={avatarImage || null}
                     />
                   </div>
-                  <h2 style={S.startTitle}>Ready when you are</h2>
+                  <h2 style={S.startTitle}>Astra is ready</h2>
                   <p style={S.startDesc}>
-                    Click below to start your voice session.
-                    You'll be asked to allow microphone access.
+                    Your AI Chief of Staff is standing by. Click to begin your voice session — try saying 'Brief me' or 'Check my emails'.
                   </p>
-                  <button style={S.startBtn} onClick={handleStart}>
+                  <button style={{ ...S.startBtn, ...S.breatheBtn }} onClick={handleStart}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
                       <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
@@ -449,6 +468,18 @@ export default function InterviewRoom({ session, onEnd }) {
                   </div>
                 )}
 
+                {/* Live Caption Overlay */}
+                {iv.transcript.length > 0 && iv.transcript[iv.transcript.length - 1]?.role === 'model' && (
+                  <div style={{
+                    ...S.captionBar,
+                    animation: 'fadeInUp 0.3s ease-out',
+                  }}>
+                    <div style={S.captionText}>
+                      {iv.transcript[iv.transcript.length - 1].text}
+                    </div>
+                  </div>
+                )}
+
                 {/* PIP Camera (floating overlay, bottom-right of avatar) */}
                 {showCam && (
                   <div style={S.pipCam}>
@@ -508,12 +539,19 @@ export default function InterviewRoom({ session, onEnd }) {
                         ...S.transcriptEntry,
                         ...(t.role === 'model' ? S.modelEntry : S.userEntry),
                       }}>
-                        <span style={{
-                          ...S.tRole,
-                          color: t.role === 'model' ? T.modelColor : T.userColor,
-                        }}>
-                          {t.role === 'model' ? (config.persona_name || 'Astra') : 'You'}
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+                          <div style={{
+                            width: 6, height: 6, borderRadius: '50%',
+                            background: t.role === 'model' ? T.modelColor : T.userColor,
+                            flexShrink: 0,
+                          }} />
+                          <span style={{
+                            ...S.tRole,
+                            color: t.role === 'model' ? T.modelColor : T.userColor,
+                          }}>
+                            {t.role === 'model' ? 'ASTRA — AI CHIEF OF STAFF' : 'YOU'}
+                          </span>
+                        </div>
                         <span style={S.tText}>{t.text}</span>
                       </div>
                     ))
@@ -558,6 +596,47 @@ export default function InterviewRoom({ session, onEnd }) {
         @keyframes spin {
           from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
+        }
+        @keyframes fadeInUp {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        @keyframes commandPulse {
+          0%, 100% {
+            box-shadow: 0 0 12px rgba(59, 130, 246, 0.4), inset 0 0 20px rgba(59, 130, 246, 0.1);
+          }
+          50% {
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.6), inset 0 0 30px rgba(59, 130, 246, 0.15);
+          }
+        }
+        @keyframes commandFadeOut {
+          0% {
+            opacity: 1;
+            transform: scale(1);
+          }
+          90% {
+            opacity: 1;
+          }
+          100% {
+            opacity: 0;
+            transform: scale(0.95);
+          }
+        }
+        @keyframes breathe {
+          0%, 100% {
+            box-shadow: 0 8px 32px rgba(59, 130, 246, 0.4);
+            transform: scale(1);
+          }
+          50% {
+            box-shadow: 0 12px 48px rgba(59, 130, 246, 0.6);
+            transform: scale(1.02);
+          }
         }
         .spin {
           animation: spin 1s linear infinite;
@@ -664,6 +743,21 @@ const getStyles = (t) => ({
     color: '#c4b5fd',
   },
   toolSpinIcon: { display: 'inline-block', fontSize: 12 },
+  commandPill: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '6px 14px', borderRadius: 20,
+    background: 'rgba(59, 130, 246, 0.12)',
+    border: '1px solid rgba(59, 130, 246, 0.3)',
+    color: '#60a5fa',
+    fontSize: 12, fontWeight: 600,
+    backdropFilter: 'blur(12px)',
+    WebkitBackdropFilter: 'blur(12px)',
+    animation: 'commandPulse 2s ease-in-out infinite',
+    maxWidth: 280,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
   timer: {
     fontSize: 18, fontWeight: 600, fontFamily: '"SF Mono", "Fira Code", monospace',
     color: t.textSecondary,
@@ -759,6 +853,9 @@ const getStyles = (t) => ({
     cursor: 'pointer',
     transition: 'all 200ms cubic-bezier(0.4, 0, 0.2, 1)',
     boxShadow: `0 8px 32px ${t.accentGlow}`,
+  },
+  breatheBtn: {
+    animation: 'breathe 2.5s ease-in-out infinite',
   },
 
   // ── AI Panel ────────────────────────────────────────────────────────────
@@ -876,6 +973,26 @@ const getStyles = (t) => ({
     border: '1px solid rgba(168,85,247,0.3)',
     color: '#c4b5fd',
   },
+  captionBar: {
+    position: 'absolute', bottom: 60, left: 0, right: 0,
+    padding: '14px 20px',
+    background: 'rgba(15, 23, 42, 0.85)',
+    backdropFilter: 'blur(12px)',
+    WebkitBackdropFilter: 'blur(12px)',
+    zIndex: 8,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  captionText: {
+    color: 'white',
+    fontSize: 14, fontWeight: 500, lineHeight: 1.4,
+    textAlign: 'center',
+    maxWidth: '90%',
+    textShadow: '0 1px 3px rgba(0,0,0,0.5)',
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+  },
 
   // ── Transcript (compact bottom section) ────────────────────────────────
   transcriptSection: {
@@ -925,10 +1042,10 @@ const getStyles = (t) => ({
     border: `1px solid ${t.transcriptUserBorder}`,
   },
   tRole: {
-    fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
+    fontSize: 10, fontWeight: 700, letterSpacing: '0.06em',
     textTransform: 'uppercase',
   },
-  tText: { fontSize: 12, color: t.text, lineHeight: 1.5 },
+  tText: { fontSize: 13, color: t.text, lineHeight: 1.5 },
 
   // ── Voice bar ───────────────────────────────────────────────────────────
   voiceBar: {
