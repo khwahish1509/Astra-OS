@@ -1242,6 +1242,569 @@ async def memory_status():
 
 
 # ─────────────────────────────────────────────
+# Demo Seed Data
+# ─────────────────────────────────────────────
+
+@app.post("/brain/seed-demo")
+async def seed_demo_data():
+    """Populate Firestore with realistic demo data for hackathon presentation."""
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+
+    from brain.store import (
+        COL_INSIGHTS, COL_RELATIONSHIPS, COL_TASKS, COL_ALERTS,
+        COL_TEAMS, COL_ROUTING_RULES, COL_ROUTED_EMAILS
+    )
+    from brain.models import (
+        Insight, InsightType, InsightSource, InsightStatus,
+        RelationshipProfile, ToneTrend,
+        Task, TaskStatus, TaskPriority,
+        Alert, AlertSeverity, AlertStatus,
+        Team, RoutingRule, RoutedEmail,
+        EmailCategory, EmailUrgency
+    )
+
+    founder = FOUNDER_ID
+    now = time.time()
+
+    # Helpers for date calculation
+    def date_from_now(days: int) -> str:
+        """Return ISO date string for N days from now (today = March 16, 2026)"""
+        base = "2026-03-16"
+        from datetime import datetime, timedelta
+        d = datetime.fromisoformat(base) + timedelta(days=days)
+        return d.isoformat()[:10]
+
+    # ── 1. Create Teams ──────────────────────────────────────────────────────
+
+    team_eng = Team(
+        founder_id=founder,
+        name="Engineering",
+        members=[
+            {"name": "Arjun", "email": "arjun@astra.ai", "role": "lead"},
+            {"name": "Riya", "email": "riya@astra.ai", "role": "backend"}
+        ],
+        color="#3b82f6"
+    )
+
+    team_design = Team(
+        founder_id=founder,
+        name="Design",
+        members=[
+            {"name": "Neha", "email": "neha@astra.ai", "role": "lead"}
+        ],
+        color="#8b5cf6"
+    )
+
+    team_sales = Team(
+        founder_id=founder,
+        name="Sales & Growth",
+        members=[
+            {"name": "Khwahish", "email": "khwahish@astra.ai", "role": "lead"},
+            {"name": "Paras", "email": "paras@astra.ai", "role": "growth"}
+        ],
+        color="#22c55e"
+    )
+
+    # Store teams
+    await asyncio.to_thread(
+        lambda: _brain_store._db.collection(COL_TEAMS).document(team_eng.id).set(team_eng.to_firestore())
+    )
+    await asyncio.to_thread(
+        lambda: _brain_store._db.collection(COL_TEAMS).document(team_design.id).set(team_design.to_firestore())
+    )
+    await asyncio.to_thread(
+        lambda: _brain_store._db.collection(COL_TEAMS).document(team_sales.id).set(team_sales.to_firestore())
+    )
+
+    # ── 2. Create Routing Rules ──────────────────────────────────────────────
+
+    rule_investor = RoutingRule(
+        founder_id=founder,
+        name="Investor Emails",
+        team_id=team_sales.id,
+        conditions={
+            "category": "sales",
+            "sender_domains": ["sequoia.vc", "ycombinator.com"]
+        },
+        priority=10
+    )
+
+    rule_bugs = RoutingRule(
+        founder_id=founder,
+        name="Bug Reports",
+        team_id=team_eng.id,
+        conditions={
+            "category": "support",
+            "keywords": ["bug", "error", "crash"]
+        },
+        priority=10
+    )
+
+    rule_design = RoutingRule(
+        founder_id=founder,
+        name="Design Feedback",
+        team_id=team_design.id,
+        conditions={
+            "category": "support",
+            "keywords": ["design", "mockup", "UI", "UX"]
+        },
+        priority=10
+    )
+
+    # Store routing rules
+    await asyncio.to_thread(
+        lambda: _brain_store._db.collection(COL_ROUTING_RULES).document(rule_investor.id).set(rule_investor.to_firestore())
+    )
+    await asyncio.to_thread(
+        lambda: _brain_store._db.collection(COL_ROUTING_RULES).document(rule_bugs.id).set(rule_bugs.to_firestore())
+    )
+    await asyncio.to_thread(
+        lambda: _brain_store._db.collection(COL_ROUTING_RULES).document(rule_design.id).set(rule_design.to_firestore())
+    )
+
+    # ── 3. Create Relationships ──────────────────────────────────────────────
+
+    rel_paras = RelationshipProfile(
+        founder_id=founder,
+        contact_email="paras@astra.ai",
+        name="Paras Singh",
+        health_score=0.92,
+        tone_trend=ToneTrend.POSITIVE,
+        last_contact_at=now - 86400,
+        interaction_count=23,
+        open_commitments=2
+    )
+
+    rel_sarah = RelationshipProfile(
+        founder_id=founder,
+        contact_email="sarah@sequoia.vc",
+        name="Sarah Chen",
+        health_score=0.78,
+        tone_trend=ToneTrend.POSITIVE,
+        last_contact_at=now - 172800,
+        interaction_count=8,
+        open_commitments=1
+    )
+
+    rel_bytebyte = RelationshipProfile(
+        founder_id=founder,
+        contact_email="team@bytebytego.com",
+        name="ByteByteGo",
+        health_score=0.65,
+        tone_trend=ToneTrend.NEUTRAL,
+        last_contact_at=now - 432000,
+        interaction_count=12,
+        open_commitments=1
+    )
+
+    rel_riya = RelationshipProfile(
+        founder_id=founder,
+        contact_email="riya@astra.ai",
+        name="Riya Sharma",
+        health_score=0.88,
+        tone_trend=ToneTrend.POSITIVE,
+        last_contact_at=now - 43200,
+        interaction_count=31,
+        open_commitments=0
+    )
+
+    rel_neha = RelationshipProfile(
+        founder_id=founder,
+        contact_email="neha@astra.ai",
+        name="Neha Gupta",
+        health_score=0.71,
+        tone_trend=ToneTrend.DECLINING,
+        last_contact_at=now - 259200,
+        interaction_count=15,
+        open_commitments=1
+    )
+
+    rel_alex = RelationshipProfile(
+        founder_id=founder,
+        contact_email="alex@ycombinator.com",
+        name="Alex Thompson",
+        health_score=0.45,
+        tone_trend=ToneTrend.NEGATIVE,
+        last_contact_at=now - 604800,
+        interaction_count=5,
+        open_commitments=1
+    )
+
+    # Store relationships
+    for rel in [rel_paras, rel_sarah, rel_bytebyte, rel_riya, rel_neha, rel_alex]:
+        await asyncio.to_thread(
+            lambda r=rel: _brain_store._db.collection(COL_RELATIONSHIPS)
+                                            .document(r.contact_email)
+                                            .set(r.to_firestore())
+        )
+
+    # ── 4. Create Tasks ──────────────────────────────────────────────────────
+
+    tasks = [
+        Task(
+            founder_id=founder,
+            title="Finalize Series A pitch deck",
+            description="Complete and polish the Series A pitch deck for investor meetings",
+            assignee="Khwahish",
+            due_date=date_from_now(1),
+            status=TaskStatus.PENDING,
+            priority="urgent",
+            tags=["fundraising", "priority"]
+        ),
+        Task(
+            founder_id=founder,
+            title="Review Q1 revenue projections",
+            description="Review and validate Q1 revenue projections with finance team",
+            assignee="Paras",
+            due_date=date_from_now(2),
+            status=TaskStatus.IN_PROGRESS,
+            priority="high",
+            tags=["finance"]
+        ),
+        Task(
+            founder_id=founder,
+            title="Ship onboarding flow v2",
+            description="Deploy updated onboarding flow to production",
+            assignee="Arjun",
+            due_date=date_from_now(3),
+            status=TaskStatus.IN_PROGRESS,
+            priority="high",
+            tags=["product", "frontend"]
+        ),
+        Task(
+            founder_id=founder,
+            title="Fix authentication timeout bug",
+            description="Resolve the authentication timeout issue reported by users",
+            assignee="Riya",
+            due_date=date_from_now(0),
+            status=TaskStatus.PENDING,
+            priority="urgent",
+            tags=["engineering", "bug"]
+        ),
+        Task(
+            founder_id=founder,
+            title="Prepare investor update email",
+            description="Prepare monthly investor update email with key metrics",
+            assignee="Khwahish",
+            due_date=date_from_now(5),
+            status=TaskStatus.BLOCKED,
+            priority="medium",
+            tags=["fundraising"]
+        ),
+        Task(
+            founder_id=founder,
+            title="Design new landing page mockups",
+            description="Create mockups for redesigned landing page",
+            assignee="Neha",
+            due_date=date_from_now(7),
+            status=TaskStatus.PENDING,
+            priority="medium",
+            tags=["design"]
+        ),
+        Task(
+            founder_id=founder,
+            title="Set up CI/CD pipeline",
+            description="Implement GitHub Actions CI/CD pipeline for automated deployments",
+            assignee="Arjun",
+            due_date=None,
+            status=TaskStatus.DONE,
+            priority="low",
+            tags=["devops"],
+            completed_at=now - 1209600
+        ),
+        Task(
+            founder_id=founder,
+            title="Customer interview - ByteByteGo",
+            description="Conduct customer interview with ByteByteGo team",
+            assignee="Khwahish",
+            due_date=None,
+            status=TaskStatus.DONE,
+            priority="high",
+            tags=["research"],
+            completed_at=now - 604800
+        ),
+    ]
+
+    # Store tasks
+    for task in tasks:
+        await asyncio.to_thread(
+            lambda t=task: _brain_store._db.collection(COL_TASKS)
+                                            .document(t.id)
+                                            .set(t.to_firestore())
+        )
+
+    # ── 5. Create Insights ───────────────────────────────────────────────────
+
+    insights = [
+        Insight(
+            founder_id=founder,
+            type=InsightType.COMMITMENT,
+            source=InsightSource.EMAIL,
+            content="Promised to send updated financials to Sarah Chen by Friday",
+            raw_context="I'll get those updated financials over to you by end of week.",
+            parties=["sarah@sequoia.vc"],
+            due_date=date_from_now(2),
+            created_at=now - 432000
+        ),
+        Insight(
+            founder_id=founder,
+            type=InsightType.RISK,
+            source=InsightSource.EMAIL,
+            content="ByteByteGo engagement declining — last 3 emails unanswered for 5+ days",
+            raw_context="No response from ByteByteGo team in over a week. Previous cadence was 2-3 responses per day.",
+            parties=["team@bytebytego.com"],
+            created_at=now - 432000
+        ),
+        Insight(
+            founder_id=founder,
+            type=InsightType.DECISION,
+            source=InsightSource.MEETING,
+            content="Decided to pivot pricing model from per-seat to usage-based",
+            raw_context="In finance meeting, agreed to shift from per-seat pricing to consumption-based model for better founder experience.",
+            parties=["paras@astra.ai"],
+            created_at=now - 864000
+        ),
+        Insight(
+            founder_id=founder,
+            type=InsightType.ACTION_ITEM,
+            source=InsightSource.EMAIL,
+            content="Schedule follow-up call with Alex Thompson re: YC application",
+            raw_context="Alex mentioned wanting to discuss YC application status. Need to set up time to talk.",
+            parties=["alex@ycombinator.com"],
+            due_date=date_from_now(3),
+            created_at=now - 604800
+        ),
+        Insight(
+            founder_id=founder,
+            type=InsightType.OPPORTUNITY,
+            source=InsightSource.EMAIL,
+            content="Sarah mentioned Sequoia is looking at AI-native productivity tools",
+            raw_context="In casual conversation, Sarah said Sequoia has been investing heavily in AI-native developer tools and would love to see more.",
+            parties=["sarah@sequoia.vc"],
+            created_at=now - 172800
+        ),
+        Insight(
+            founder_id=founder,
+            type=InsightType.COMMITMENT,
+            source=InsightSource.EMAIL,
+            content="Agreed to deliver MVP demo to ByteByteGo by March 20",
+            raw_context="ByteByteGo team wants to see a working MVP. We committed to March 20 delivery.",
+            parties=["team@bytebytego.com"],
+            due_date=date_from_now(4),
+            created_at=now - 432000
+        ),
+        Insight(
+            founder_id=founder,
+            type=InsightType.RISK,
+            source=InsightSource.MEETING,
+            content="Sprint velocity dropped 20% last week — team may be burning out",
+            raw_context="Engineering standup showed velocity down from 42 to 34 points. Team looks tired.",
+            parties=[],
+            created_at=now - 259200
+        ),
+        Insight(
+            founder_id=founder,
+            type=InsightType.DECISION,
+            source=InsightSource.MEETING,
+            content="Chose Google Cloud + Firestore over AWS for infrastructure",
+            raw_context="After cost and latency analysis, decided to go with Google Cloud and Firestore for our backend.",
+            parties=["paras@astra.ai", "riya@astra.ai"],
+            created_at=now - 1209600
+        ),
+    ]
+
+    # Store insights
+    for insight in insights:
+        await asyncio.to_thread(
+            lambda i=insight: _brain_store._db.collection(COL_INSIGHTS)
+                                               .document(i.id)
+                                               .set(i.to_firestore())
+        )
+
+    # ── 6. Create Alerts ─────────────────────────────────────────────────────
+
+    alerts = [
+        Alert(
+            founder_id=founder,
+            title="Overdue: Financials for Sarah Chen",
+            message="You promised updated financials to Sarah Chen by Friday. It's now 2 days overdue. She may be waiting on this for investment decisions.",
+            severity=AlertSeverity.CRITICAL,
+            status=AlertStatus.PENDING,
+            related_contact="sarah@sequoia.vc"
+        ),
+        Alert(
+            founder_id=founder,
+            title="Relationship at risk: Alex Thompson",
+            message="Your relationship health with Alex Thompson is declining (score: 0.45). He hasn't heard from you in 5+ days. Consider reaching out.",
+            severity=AlertSeverity.HIGH,
+            status=AlertStatus.PENDING,
+            related_contact="alex@ycombinator.com"
+        ),
+        Alert(
+            founder_id=founder,
+            title="Sprint velocity declining",
+            message="Engineering team velocity dropped 20% last week. This could indicate burnout or blockers. Consider team check-in.",
+            severity=AlertSeverity.HIGH,
+            status=AlertStatus.PENDING
+        ),
+        Alert(
+            founder_id=founder,
+            title="ByteByteGo MVP deadline in 4 days",
+            message="You committed to deliver MVP demo to ByteByteGo by March 20. That's 4 days away. Check with Arjun on progress.",
+            severity=AlertSeverity.MEDIUM,
+            status=AlertStatus.PENDING,
+            related_contact="team@bytebytego.com"
+        ),
+        Alert(
+            founder_id=founder,
+            title="3 unanswered emails from Neha",
+            message="Neha has sent 3 emails in the past 48 hours without responses. Internal communication gap detected.",
+            severity=AlertSeverity.MEDIUM,
+            status=AlertStatus.PENDING,
+            related_contact="neha@astra.ai"
+        ),
+        Alert(
+            founder_id=founder,
+            title="Weekly investor update not sent",
+            message="You typically send investor updates on Mondays. This week's update hasn't been sent yet.",
+            severity=AlertSeverity.LOW,
+            status=AlertStatus.PENDING
+        ),
+    ]
+
+    # Store alerts
+    for alert in alerts:
+        await asyncio.to_thread(
+            lambda a=alert: _brain_store._db.collection(COL_ALERTS)
+                                             .document(a.id)
+                                             .set(a.to_firestore())
+        )
+
+    # ── 7. Create Routed Emails ──────────────────────────────────────────────
+
+    routed_emails = [
+        RoutedEmail(
+            founder_id=founder,
+            email_id="msg_001",
+            sender="Sarah Chen",
+            sender_email="sarah@sequoia.vc",
+            subject="Re: Series A Timeline",
+            snippet="When can we set up the follow-up meeting? Excited about your metrics.",
+            category="sales",
+            confidence=0.95,
+            urgency="high",
+            sentiment="positive",
+            routed_to_team=team_sales.id,
+            routed_to_team_name="Sales & Growth",
+            routing_method="ai",
+            status="new"
+        ),
+        RoutedEmail(
+            founder_id=founder,
+            email_id="msg_002",
+            sender="GitHub Alerts",
+            sender_email="noreply@github.com",
+            subject="Critical vulnerability in dependency",
+            snippet="A critical security vulnerability was found in one of your dependencies. Please update immediately.",
+            category="engineering",
+            confidence=0.99,
+            urgency="critical",
+            sentiment="negative",
+            routed_to_team=team_eng.id,
+            routed_to_team_name="Engineering",
+            routing_method="rule",
+            status="new"
+        ),
+        RoutedEmail(
+            founder_id=founder,
+            email_id="msg_003",
+            sender="Alex Thompson",
+            sender_email="alex@ycombinator.com",
+            subject="YC Application Follow-up",
+            snippet="Hi, just checking in on the status of your application. Let me know if you need anything.",
+            category="sales",
+            confidence=0.87,
+            urgency="medium",
+            sentiment="neutral",
+            routed_to_team=team_sales.id,
+            routed_to_team_name="Sales & Growth",
+            routing_method="ai",
+            status="new"
+        ),
+        RoutedEmail(
+            founder_id=founder,
+            email_id="msg_004",
+            sender="Stripe",
+            sender_email="notifications@stripe.com",
+            subject="Monthly revenue report ready",
+            snippet="Your monthly revenue report for February is ready. Total: $48,200.",
+            category="finance",
+            confidence=0.99,
+            urgency="low",
+            sentiment="positive",
+            status="new"
+        ),
+        RoutedEmail(
+            founder_id=founder,
+            email_id="msg_005",
+            sender="Intercom",
+            sender_email="support@intercom.io",
+            subject="New support ticket: Login issue",
+            snippet="User reports they cannot login. Error: 'Session timeout'. Affects 5 users.",
+            category="support",
+            confidence=0.92,
+            urgency="high",
+            sentiment="negative",
+            routed_to_team=team_eng.id,
+            routed_to_team_name="Engineering",
+            routing_method="rule",
+            status="new"
+        ),
+        RoutedEmail(
+            founder_id=founder,
+            email_id="msg_006",
+            sender="Neha Gupta",
+            sender_email="neha@astra.ai",
+            subject="Landing page mockups ready for review",
+            snippet="I've finished the landing page redesign mockups. Ready for your feedback!",
+            category="personal",
+            confidence=0.88,
+            urgency="medium",
+            sentiment="positive",
+            routed_to_team=team_design.id,
+            routed_to_team_name="Design",
+            routing_method="ai",
+            status="new"
+        ),
+    ]
+
+    # Store routed emails
+    for email in routed_emails:
+        await asyncio.to_thread(
+            lambda e=email: _brain_store._db.collection(COL_ROUTED_EMAILS)
+                                             .document(e.id)
+                                             .set(e.to_firestore())
+        )
+
+    # Return summary
+    return {
+        "status": "success",
+        "message": "Demo data seeded successfully",
+        "data": {
+            "teams_created": 3,
+            "routing_rules_created": 3,
+            "relationships_created": 6,
+            "tasks_created": len(tasks),
+            "insights_created": len(insights),
+            "alerts_created": len(alerts),
+            "routed_emails_created": len(routed_emails),
+            "total_records": 3 + 3 + 6 + len(tasks) + len(insights) + len(alerts) + len(routed_emails)
+        }
+    }
+
+
+# ─────────────────────────────────────────────
 # Serve React frontend (production only)
 # ─────────────────────────────────────────────
 

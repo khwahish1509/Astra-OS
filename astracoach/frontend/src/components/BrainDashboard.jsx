@@ -8,7 +8,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+const BACKEND = import.meta.env.VITE_BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:8000' : '')
 const POLL_INTERVAL = 30000
 
 export default function BrainDashboard({ isAstra = false }) {

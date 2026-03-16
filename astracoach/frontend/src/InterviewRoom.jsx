@@ -42,7 +42,7 @@ const NAV_ITEMS = [
 ]
 
 export default function InterviewRoom({ session, onEnd }) {
-  const { session_id, config, backendUrl, avatarImage } = session
+  const { session_id, config, backendUrl, avatarImage, demoMode } = session
   const { theme: T } = useTheme()
   const S = getStyles(T)
 
@@ -50,7 +50,7 @@ export default function InterviewRoom({ session, onEnd }) {
   const [elapsed, setElapsed] = useState(0)
   const [muted, setMuted] = useState(false)
   const [camOn, setCamOn] = useState(true)
-  const [started, setStarted] = useState(false)
+  const [started, setStarted] = useState(!!demoMode)
   const [ending, setEnding] = useState(false)
   const [activeNav, setActiveNav] = useState('dashboard')
   const [aiPanelCollapsed, setAiPanelCollapsed] = useState(false)
@@ -129,6 +129,7 @@ export default function InterviewRoom({ session, onEnd }) {
 
   // ── Start session ───────────────────────────────────────────────────────
   const handleStart = useCallback(async () => {
+    if (demoMode) { setStarted(true); return }
     await audio.start()
     await audio.resume()
     try {
@@ -141,7 +142,7 @@ export default function InterviewRoom({ session, onEnd }) {
       simli.initialize().catch(() => { })
     }
     setStarted(true)
-  }, [audio, iv, simli])
+  }, [audio, iv, simli, demoMode])
 
   const handleMute = () => {
     const next = !muted
@@ -156,6 +157,7 @@ export default function InterviewRoom({ session, onEnd }) {
 
   const handleEnd = async () => {
     setEnding(true)
+    if (demoMode) { onEnd(); return }
     screenshare.stop()
     audio.stop()
     iv.disconnect()

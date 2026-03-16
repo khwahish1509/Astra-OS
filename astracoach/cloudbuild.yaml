@@ -1,13 +1,6 @@
 # ─────────────────────────────────────────────────────────────────
-# AstraCoach — Google Cloud Build Configuration
+# Astra OS — Google Cloud Build Configuration
 # Builds Docker image, pushes to Artifact Registry, deploys to Cloud Run
-#
-# One-time setup:
-#   gcloud services enable cloudbuild.googleapis.com run.googleapis.com \
-#     secretmanager.googleapis.com artifactregistry.googleapis.com
-#   gcloud artifacts repositories create astracoach \
-#     --repository-format=docker --location=us-central1
-#   echo -n "your-key" | gcloud secrets create GOOGLE_API_KEY --data-file=-
 #
 # Deploy:
 #   gcloud builds submit --config cloudbuild.yaml .
@@ -16,7 +9,7 @@
 substitutions:
   _SERVICE:  astracoach
   _REGION:   us-central1
-  _REPO:     us-central1-docker.pkg.dev/$PROJECT_ID/astracoach/astracoach
+  _TAG:      latest
 
 steps:
   # ── 1. Build image ────────────────────────────────────────────
@@ -25,19 +18,19 @@ steps:
     args:
       - build
       - --tag
-      - '${_REPO}:$COMMIT_SHA'
-      - --tag
-      - '${_REPO}:latest'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/astracoach/astracoach:${_TAG}'
       - --build-arg
-      - 'VITE_BACKEND_URL=https://${_SERVICE}-$_SHORT_SHA-uc.a.run.app'
+      - 'VITE_BACKEND_URL='
       - --cache-from
-      - '${_REPO}:latest'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/astracoach/astracoach:${_TAG}'
       - .
 
   # ── 2. Push ───────────────────────────────────────────────────
   - name: 'gcr.io/cloud-builders/docker'
     id: push
-    args: [push, '--all-tags', '${_REPO}']
+    args:
+      - push
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/astracoach/astracoach:${_TAG}'
 
   # ── 3. Deploy to Cloud Run ────────────────────────────────────
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -48,7 +41,7 @@ steps:
       - deploy
       - '${_SERVICE}'
       - --image
-      - '${_REPO}:$COMMIT_SHA'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/astracoach/astracoach:${_TAG}'
       - --region
       - '${_REGION}'
       - --platform
@@ -59,21 +52,20 @@ steps:
       - --cpu
       - '2'
       - --min-instances
-      - '1'        # stay warm — critical for real-time WebSocket sessions
+      - '0'
       - --max-instances
       - '20'
       - --port
       - '8080'
       - --timeout
-      - '3600'     # 1-hour session timeout
+      - '3600'
       - --set-secrets
       - 'GOOGLE_API_KEY=GOOGLE_API_KEY:latest'
       - --set-env-vars
-      - 'ENV=production,GEMINI_MODEL=gemini-2.5-flash-preview-native-audio-12-2025'
+      - 'ENV=production,GEMINI_MODEL=gemini-2.5-flash-preview-native-audio-12-2025,FIRESTORE_PROJECT_ID=$PROJECT_ID,FOUNDER_ID=default_founder'
 
 images:
-  - '${_REPO}:$COMMIT_SHA'
-  - '${_REPO}:latest'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/astracoach/astracoach:${_TAG}'
 
 timeout: '1800s'
 

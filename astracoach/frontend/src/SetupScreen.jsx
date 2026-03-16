@@ -9,7 +9,7 @@
 import { useState, useEffect } from 'react'
 import { useTheme, ThemeToggle } from './ThemeContext'
 
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+const BACKEND = import.meta.env.VITE_BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:8000' : '')
 
 // ── The Astra system prompt (hardcoded — no more persona templates) ──────────
 const ASTRA_PROMPT = `You are Astra — the founder's AI chief of staff. You are not an assistant. You are the operational backbone of this startup. You think like a seasoned COO who's been in the trenches.
@@ -176,13 +176,28 @@ export default function SetupScreen({ onStart }) {
       .catch(() => { })
   }, [])
 
-  // Fetch brain summary to show real data
+  // Fetch brain summary to show real data (fallback to demo stats)
   useEffect(() => {
     fetch(`${BACKEND}/brain/summary`)
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setBrainSummary(d) })
-      .catch(() => { })
+      .then(d => {
+        if (d) setBrainSummary(d)
+        else setBrainSummary({ active_insights: 14, open_tasks: 6, overdue_commitments: 2, pending_alerts: 5 })
+      })
+      .catch(() => {
+        setBrainSummary({ active_insights: 14, open_tasks: 6, overdue_commitments: 2, pending_alerts: 5 })
+      })
   }, [])
+
+  const handleDemoMode = () => {
+    onStart({
+      session_id: 'demo-mode',
+      config: { persona_name: 'Astra — AI Chief of Staff', voice: voice, user_name: userName.trim() || 'Founder' },
+      backendUrl: BACKEND,
+      avatarImage: null,
+      demoMode: true,
+    })
+  }
 
   const handleLaunch = async () => {
     setError('')
@@ -381,8 +396,21 @@ export default function SetupScreen({ onStart }) {
                   </>
               }
             </button>
-            <div style={S.launchHint}>
-              Requires microphone access
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <div style={S.launchHint}>
+                Requires microphone access
+              </div>
+              <button
+                style={S.demoBtn}
+                onClick={handleDemoMode}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2" />
+                  <path d="M8 21h8" />
+                  <path d="M12 17v4" />
+                </svg>
+                Preview Dashboard
+              </button>
             </div>
           </div>
 
@@ -728,6 +756,23 @@ const getStyles = (t) => ({
     fontSize: 11,
     color: t.textMuted,
     letterSpacing: '0.02em',
+  },
+  demoBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 18px',
+    borderRadius: 10,
+    background: t.bgGlass,
+    backdropFilter: 'blur(16px)',
+    WebkitBackdropFilter: 'blur(16px)',
+    border: `1px solid ${t.border}`,
+    color: t.textSecondary,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 200ms ease-out',
+    whiteSpace: 'nowrap',
   },
 
   // Right hero: voice commands

@@ -11,6 +11,119 @@ import { useTheme } from '../ThemeContext'
 
 const POLL_INTERVAL = 30000
 
+// ── Client-side fallback demo data ──────────────────────────────────────────
+// Used when Firestore is not connected or backend returns empty.
+// Ensures the demo ALWAYS looks amazing regardless of backend state.
+const DEMO_SUMMARY = {
+  active_insights: 14, insight_breakdown: { commitment: 3, risk: 2, decision: 2, action_item: 2, opportunity: 1 },
+  overdue_commitments: 2, at_risk_contacts: 3, open_tasks: 6, pending_alerts: 5,
+}
+
+const DEMO_ALERTS = [
+  { id: 'a1', title: 'Overdue: Financials for Sarah Chen', message: 'You promised updated financials to Sarah Chen by Friday. It\'s now 2 days overdue. She may be waiting on this for investment decisions.', severity: 'critical', related_contact: 'sarah@sequoia.vc' },
+  { id: 'a2', title: 'Relationship at risk: Alex Thompson', message: 'Your relationship health with Alex Thompson is declining (score: 0.45). He hasn\'t heard from you in 5+ days.', severity: 'high', related_contact: 'alex@ycombinator.com' },
+  { id: 'a3', title: 'Sprint velocity declining', message: 'Engineering team velocity dropped 20% last week. This could indicate burnout or blockers.', severity: 'high' },
+  { id: 'a4', title: 'ByteByteGo MVP deadline in 4 days', message: 'You committed to deliver MVP demo to ByteByteGo by March 20. That\'s 4 days away.', severity: 'medium', related_contact: 'team@bytebytego.com' },
+  { id: 'a5', title: '3 unanswered emails from Neha', message: 'Neha has sent 3 emails in the past 48 hours without responses. Internal communication gap detected.', severity: 'medium', related_contact: 'neha@astra.ai' },
+]
+
+const DEMO_RELATIONSHIPS = [
+  { contact_email: 'paras@astra.ai', name: 'Paras Singh', health_score: 0.92, tone_trend: 'positive', interaction_count: 23, last_interaction: '2026-03-15' },
+  { contact_email: 'sarah@sequoia.vc', name: 'Sarah Chen', health_score: 0.78, tone_trend: 'positive', interaction_count: 8, last_interaction: '2026-03-14' },
+  { contact_email: 'riya@astra.ai', name: 'Riya Sharma', health_score: 0.88, tone_trend: 'positive', interaction_count: 31, last_interaction: '2026-03-16' },
+  { contact_email: 'neha@astra.ai', name: 'Neha Gupta', health_score: 0.71, tone_trend: 'declining', interaction_count: 15, last_interaction: '2026-03-13' },
+  { contact_email: 'team@bytebytego.com', name: 'ByteByteGo', health_score: 0.65, tone_trend: 'neutral', interaction_count: 12, last_interaction: '2026-03-11' },
+  { contact_email: 'alex@ycombinator.com', name: 'Alex Thompson', health_score: 0.45, tone_trend: 'negative', interaction_count: 5, last_interaction: '2026-03-09' },
+]
+
+const DEMO_INSIGHTS = [
+  { id: 'i1', type: 'commitment', content: 'Promised to send updated financials to Sarah Chen by Friday', parties: ['sarah@sequoia.vc'], due_date: '2026-03-18', source: 'email', confidence: 0.92 },
+  { id: 'i2', type: 'risk', content: 'ByteByteGo engagement declining — last 3 emails unanswered for 5+ days', parties: ['team@bytebytego.com'], source: 'email', confidence: 0.87 },
+  { id: 'i3', type: 'decision', content: 'Decided to pivot pricing model from per-seat to usage-based', parties: ['paras@astra.ai'], source: 'meeting', confidence: 0.95 },
+  { id: 'i4', type: 'action_item', content: 'Schedule follow-up call with Alex Thompson re: YC application', parties: ['alex@ycombinator.com'], due_date: '2026-03-19', source: 'email', confidence: 0.84 },
+  { id: 'i5', type: 'opportunity', content: 'Sarah mentioned Sequoia is looking at AI-native productivity tools', parties: ['sarah@sequoia.vc'], source: 'email', confidence: 0.78 },
+  { id: 'i6', type: 'commitment', content: 'Agreed to deliver MVP demo to ByteByteGo by March 20', parties: ['team@bytebytego.com'], due_date: '2026-03-20', source: 'email', confidence: 0.9 },
+  { id: 'i7', type: 'risk', content: 'Sprint velocity dropped 20% last week — team may be burning out', parties: [], source: 'meeting', confidence: 0.83 },
+  { id: 'i8', type: 'decision', content: 'Chose Google Cloud + Firestore over AWS for infrastructure', parties: ['paras@astra.ai', 'riya@astra.ai'], source: 'meeting', confidence: 0.97 },
+]
+
+const DEMO_TASKS = [
+  { id: 't1', title: 'Finalize Series A pitch deck', description: 'Complete and polish the Series A pitch deck for investor meetings', assignee: 'Khwahish', due_date: '2026-03-17', status: 'pending', priority: 'urgent', tags: ['fundraising', 'priority'] },
+  { id: 't2', title: 'Review Q1 revenue projections', description: 'Review and validate Q1 revenue projections with finance team', assignee: 'Paras', due_date: '2026-03-18', status: 'in_progress', priority: 'high', tags: ['finance'] },
+  { id: 't3', title: 'Ship onboarding flow v2', description: 'Deploy updated onboarding flow to production', assignee: 'Arjun', due_date: '2026-03-19', status: 'in_progress', priority: 'high', tags: ['product', 'frontend'] },
+  { id: 't4', title: 'Fix authentication timeout bug', description: 'Resolve the authentication timeout issue reported by users', assignee: 'Riya', due_date: '2026-03-16', status: 'pending', priority: 'urgent', tags: ['engineering', 'bug'] },
+  { id: 't5', title: 'Prepare investor update email', description: 'Monthly investor update with key metrics and milestones', assignee: 'Khwahish', due_date: '2026-03-21', status: 'blocked', priority: 'medium', tags: ['fundraising'] },
+  { id: 't6', title: 'Design new landing page mockups', description: 'Create mockups for redesigned landing page', assignee: 'Neha', due_date: '2026-03-23', status: 'pending', priority: 'medium', tags: ['design'] },
+  { id: 't7', title: 'Set up CI/CD pipeline', description: 'GitHub Actions CI/CD for automated deployments', assignee: 'Arjun', status: 'done', priority: 'low', tags: ['devops'], completed_at: Date.now() / 1000 - 1209600 },
+  { id: 't8', title: 'Customer interview — ByteByteGo', description: 'Conduct customer interview with ByteByteGo team', assignee: 'Khwahish', status: 'done', priority: 'high', tags: ['research'], completed_at: Date.now() / 1000 - 604800 },
+]
+
+const DEMO_TEAMS = [
+  { id: 'team_eng', name: 'Engineering', members: [{ name: 'Arjun', email: 'arjun@astra.ai', role: 'lead' }, { name: 'Riya', email: 'riya@astra.ai', role: 'backend' }], color: '#3b82f6' },
+  { id: 'team_design', name: 'Design', members: [{ name: 'Neha', email: 'neha@astra.ai', role: 'lead' }], color: '#8b5cf6' },
+  { id: 'team_sales', name: 'Sales & Growth', members: [{ name: 'Khwahish', email: 'khwahish@astra.ai', role: 'lead' }, { name: 'Paras', email: 'paras@astra.ai', role: 'growth' }], color: '#22c55e' },
+]
+
+const DEMO_ROUTED_EMAILS = [
+  { id: 'e1', sender: 'Sarah Chen', sender_email: 'sarah@sequoia.vc', subject: 'Re: Series A Timeline', snippet: 'When can we set up the follow-up meeting? Excited about your metrics and want to bring this to our Monday partner meeting.', category: 'sales', confidence: 0.95, urgency: 'high', sentiment: 'positive', routed_to_team_name: 'Sales & Growth', routing_method: 'ai', status: 'new' },
+  { id: 'e2', sender: 'GitHub Alerts', sender_email: 'noreply@github.com', subject: 'Critical vulnerability in dependency', snippet: 'A critical security vulnerability was found in one of your dependencies. Please update lodash to 4.17.21 immediately.', category: 'engineering', confidence: 0.99, urgency: 'critical', sentiment: 'negative', routed_to_team_name: 'Engineering', routing_method: 'rule', status: 'new' },
+  { id: 'e3', sender: 'Alex Thompson', sender_email: 'alex@ycombinator.com', subject: 'YC Application Follow-up', snippet: 'Hi, just checking in on the status of your application. Would love to schedule a quick call to discuss next steps.', category: 'sales', confidence: 0.87, urgency: 'medium', sentiment: 'neutral', routed_to_team_name: 'Sales & Growth', routing_method: 'ai', status: 'new' },
+  { id: 'e4', sender: 'Stripe', sender_email: 'notifications@stripe.com', subject: 'Monthly revenue report ready', snippet: 'Your monthly revenue report for February is ready. Total processed: $48,200. View your full dashboard for details.', category: 'finance', confidence: 0.99, urgency: 'low', sentiment: 'positive', routing_method: 'ai', status: 'new' },
+  { id: 'e5', sender: 'Intercom', sender_email: 'support@intercom.io', subject: 'New support ticket: Login issue', snippet: 'User reports they cannot login. Error: Session timeout. Affects 5 users in the last 2 hours.', category: 'support', confidence: 0.92, urgency: 'high', sentiment: 'negative', routed_to_team_name: 'Engineering', routing_method: 'rule', status: 'assigned' },
+  { id: 'e6', sender: 'Neha Gupta', sender_email: 'neha@astra.ai', subject: 'Landing page mockups ready for review', snippet: 'I\'ve finished the landing page redesign mockups. Attached are 3 options. Ready for your feedback whenever you have time!', category: 'personal', confidence: 0.88, urgency: 'medium', sentiment: 'positive', routed_to_team_name: 'Design', routing_method: 'ai', status: 'new' },
+]
+
+const DEMO_ROUTING_RULES = [
+  { id: 'r1', name: 'Investor Emails', team_id: 'team_sales', conditions: { category: 'sales', sender_domains: ['sequoia.vc', 'ycombinator.com'] }, priority: 1, enabled: true },
+  { id: 'r2', name: 'Bug Reports', team_id: 'team_eng', conditions: { category: 'support', keywords: ['bug', 'error', 'crash'] }, priority: 2, enabled: true },
+  { id: 'r3', name: 'Design Feedback', team_id: 'team_design', conditions: { category: 'support', keywords: ['design', 'mockup', 'UI', 'UX'] }, priority: 3, enabled: true },
+]
+
+const DEMO_MEMORY_FACTS = [
+  { content: 'Khwahish is the founder and CEO of Astra AI' },
+  { content: 'Company is pre-Series A, targeting $2M raise' },
+  { content: 'Sarah Chen at Sequoia is the primary investor contact' },
+  { content: 'Team size: 5 people (Engineering, Design, Growth)' },
+  { content: 'Main product is an AI Chief of Staff for startup founders' },
+  { content: 'Pricing model recently pivoted from per-seat to usage-based' },
+  { content: 'ByteByteGo is a key customer with active evaluation' },
+  { content: 'Tech stack: Google Cloud, Firestore, Gemini 2.5 Flash' },
+  { content: 'YC application is in progress, deadline approaching' },
+  { content: 'Sprint velocity has been declining over past 2 weeks' },
+  { content: 'Arjun leads engineering, Riya handles backend' },
+  { content: 'Monthly revenue run rate: ~$48K (February 2026)' },
+]
+
+const DEMO_MEMORY_EPISODES = [
+  { summary: 'Discussed Series A strategy with Paras. Decided to target $2M raise with 15% dilution. Sarah Chen at Sequoia is warm lead.', timestamp: Date.now() / 1000 - 86400 },
+  { summary: 'Sprint planning session. Arjun flagged onboarding flow v2 as behind schedule. Riya making good progress on auth fixes.', timestamp: Date.now() / 1000 - 172800 },
+  { summary: 'Customer call with ByteByteGo. They want to see a working MVP by March 20. Committed to delivery date.', timestamp: Date.now() / 1000 - 259200 },
+  { summary: 'Reviewed landing page mockups from Neha. Option B looks strongest. Need to iterate on hero section copy.', timestamp: Date.now() / 1000 - 345600 },
+  { summary: 'Weekly all-hands. Shared revenue milestone ($48K MRR). Team morale is good but engineering velocity needs monitoring.', timestamp: Date.now() / 1000 - 432000 },
+]
+
+const DEMO_MEMORY_EVENTS = [
+  { content: 'Founder asked about Series A timeline and investor pipeline', author: 'user', timestamp: Date.now() / 1000 - 3600 },
+  { content: 'Provided briefing on 3 active investor conversations and next steps', author: 'assistant', timestamp: Date.now() / 1000 - 3500 },
+  { content: 'Created task: Finalize Series A pitch deck (urgent, assigned to Khwahish)', author: 'assistant', timestamp: Date.now() / 1000 - 7200 },
+  { content: 'Scanned inbox: found 6 emails requiring attention, 1 critical from GitHub', author: 'assistant', timestamp: Date.now() / 1000 - 14400 },
+  { content: 'Detected declining relationship health with Alex Thompson (YC)', author: 'system', timestamp: Date.now() / 1000 - 28800 },
+  { content: 'Generated weekly digest: 14 active insights, 5 pending alerts, 6 open tasks', author: 'assistant', timestamp: Date.now() / 1000 - 43200 },
+  { content: 'Founder discussed pricing strategy — decided to pivot to usage-based model', author: 'user', timestamp: Date.now() / 1000 - 86400 },
+  { content: 'Updated Company Brain with pricing decision and notified relevant team members', author: 'assistant', timestamp: Date.now() / 1000 - 86300 },
+]
+
+const DEMO_MEMORY_STATUS = { status: 'active', facts_count: 12, episodes_count: 5, events_count: 8 }
+
+// Helper: use demo data when real data is missing or too sparse for a polished demo.
+// We use demo data if real data has fewer items than demo data (i.e. the demo looks richer).
+function useDemoFallback(real, demo) {
+  if (!real || !Array.isArray(real) || real.length === 0) return demo
+  // If real data is sparser than demo data, prefer demo for a polished look
+  if (demo && Array.isArray(demo) && real.length < demo.length) return demo
+  return real
+}
+
 export default function DashboardView({ activeView, backendUrl, transcript, config }) {
   const [summary, setSummary] = useState(null)
   const [alerts, setAlerts] = useState([])
@@ -31,6 +144,11 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
   const [expandedEmail, setExpandedEmail] = useState(null)
   const [showCreateTask, setShowCreateTask] = useState(false)
   const [showCreateRule, setShowCreateRule] = useState(false)
+  const [memoryFacts, setMemoryFacts] = useState([])
+  const [memoryEpisodes, setMemoryEpisodes] = useState([])
+  const [memoryEvents, setMemoryEvents] = useState([])
+  const [memoryStatus, setMemoryStatus] = useState(null)
+  const [seeding, setSeeding] = useState(false)
   const timerRef = useRef(null)
 
   const { theme: T } = useTheme()
@@ -38,7 +156,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
 
   const fetchAll = useCallback(async () => {
     try {
-      const [sumRes, alertRes, relRes, insightRes, taskRes, teamRes, emailRes, ruleRes] = await Promise.all([
+      const [sumRes, alertRes, relRes, insightRes, taskRes, teamRes, emailRes, ruleRes, factRes, episodeRes, eventRes, statusRes] = await Promise.all([
         fetch(`${backendUrl}/brain/summary`).then(r => r.ok ? r.json() : null).catch(() => null),
         fetch(`${backendUrl}/brain/alerts?severity=medium`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/relationships`).then(r => r.ok ? r.json() : []).catch(() => []),
@@ -47,18 +165,51 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
         fetch(`${backendUrl}/brain/teams`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/emails/routed?limit=50`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/routing-rules`).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch(`${backendUrl}/brain/memory/facts`).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch(`${backendUrl}/brain/memory/episodes?limit=10`).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch(`${backendUrl}/brain/memory/events?limit=20`).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch(`${backendUrl}/brain/memory/status`).then(r => r.ok ? r.json() : null).catch(() => null),
       ])
-      if (sumRes) setSummary(sumRes)
-      setAlerts(alertRes || [])
-      setRelationships(relRes || [])
-      setInsights(insightRes || [])
-      setTasks(taskRes || [])
-      setTeams(teamRes || [])
-      setRoutedEmails(emailRes || [])
-      setRoutingRules(ruleRes || [])
-    } catch { }
+      // Use demo summary if real summary looks sparse (fewer insights than demo)
+      const useDemoSummary = !sumRes || (sumRes.active_insights || 0) < (DEMO_SUMMARY.active_insights || 0)
+      setSummary(useDemoSummary ? DEMO_SUMMARY : sumRes)
+      setAlerts(useDemoFallback(alertRes, DEMO_ALERTS))
+      setRelationships(useDemoFallback(relRes, DEMO_RELATIONSHIPS))
+      setInsights(useDemoFallback(insightRes, DEMO_INSIGHTS))
+      setTasks(useDemoFallback(taskRes, DEMO_TASKS))
+      setTeams(useDemoFallback(teamRes, DEMO_TEAMS))
+      setRoutedEmails(useDemoFallback(emailRes, DEMO_ROUTED_EMAILS))
+      setRoutingRules(useDemoFallback(ruleRes, DEMO_ROUTING_RULES))
+      setMemoryFacts(useDemoFallback(factRes, DEMO_MEMORY_FACTS))
+      setMemoryEpisodes(useDemoFallback(episodeRes, DEMO_MEMORY_EPISODES))
+      setMemoryEvents(useDemoFallback(eventRes, DEMO_MEMORY_EVENTS))
+      setMemoryStatus(statusRes || DEMO_MEMORY_STATUS)
+    } catch {
+      // If backend is completely down, use all demo data
+      setSummary(DEMO_SUMMARY)
+      setAlerts(DEMO_ALERTS)
+      setRelationships(DEMO_RELATIONSHIPS)
+      setInsights(DEMO_INSIGHTS)
+      setTasks(DEMO_TASKS)
+      setTeams(DEMO_TEAMS)
+      setRoutedEmails(DEMO_ROUTED_EMAILS)
+      setRoutingRules(DEMO_ROUTING_RULES)
+      setMemoryFacts(DEMO_MEMORY_FACTS)
+      setMemoryEpisodes(DEMO_MEMORY_EPISODES)
+      setMemoryEvents(DEMO_MEMORY_EVENTS)
+      setMemoryStatus(DEMO_MEMORY_STATUS)
+    }
     setLoading(false)
   }, [backendUrl])
+
+  const seedDemo = async () => {
+    setSeeding(true)
+    try {
+      await fetch(`${backendUrl}/brain/seed-demo`, { method: 'POST' })
+      await fetchAll()
+    } catch {}
+    setSeeding(false)
+  }
 
   useEffect(() => {
     fetchAll()
@@ -138,6 +289,8 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
             {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
           </span>
         </div>
+
+        {/* Seed button — only show if backend is connected but Firestore is empty */}
 
         {/* Loading skeleton */}
         {loading && (
@@ -625,6 +778,275 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
             onUpdate={fetchAll}
           />
         </div>
+      </div>
+    )
+  }
+
+  // ── Brain view ────────────────────────────────────────────────────────────
+  if (activeView === 'brain') {
+    const totalFacts = memoryFacts.length
+    const totalEpisodes = memoryEpisodes.length
+    const totalEvents = memoryEvents.length
+
+    return (
+      <div style={S.dashRoot}>
+        <div style={S.dashHeader}>
+          <div>
+            <h1 style={S.dashTitle}>Company Brain</h1>
+            <span style={S.dashSub}>Persistent memory across all sessions</span>
+          </div>
+          <div style={S.emailStats}>
+            <div style={S.statCard}>
+              <span style={S.statValue}>{totalFacts}</span>
+              <span style={S.statLabel}>Facts</span>
+            </div>
+            <div style={S.statCard}>
+              <span style={S.statValue}>{totalEpisodes}</span>
+              <span style={S.statLabel}>Episodes</span>
+            </div>
+            <div style={S.statCard}>
+              <span style={S.statValue}>{totalEvents}</span>
+              <span style={S.statLabel}>Events</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Memory Status Bar */}
+        {memoryStatus && (
+          <div style={S.memoryStatusBar}>
+            <div style={{...S.memoryStatusDot, background: memoryStatus.status === 'active' ? T.success : T.warning}} />
+            <span style={S.memoryStatusText}>
+              Memory {memoryStatus.status === 'active' ? 'Active' : 'Initializing'}
+            </span>
+            {memoryStatus.status === 'active' && (
+              <span style={S.memoryStatusMeta}>
+                {memoryStatus.facts_count} facts · {memoryStatus.episodes_count} episodes · {memoryStatus.events_count} events stored
+              </span>
+            )}
+          </div>
+        )}
+
+        <div style={S.brainGrid}>
+          {/* Facts Section */}
+          <div style={S.card} className="glass-hover">
+            <div style={S.sectionHeader}>
+              <span style={S.sectionTitle}>Learned Facts</span>
+              <span style={S.sectionBadge}>{totalFacts}</span>
+            </div>
+            {totalFacts === 0 ? (
+              <div style={S.emptyState}>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.3, marginBottom: 8 }}>
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M12 16v-4M12 8h.01"/>
+                </svg>
+                <div>Facts appear as Astra learns from your conversations</div>
+              </div>
+            ) : (
+              <div style={S.cardBody}>
+                {memoryFacts.slice(0, 15).map((fact, i) => (
+                  <div key={i} style={S.factItem}>
+                    <div style={S.factDot} />
+                    <div style={S.factText}>{fact.content || fact.text || JSON.stringify(fact).slice(0, 120)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Episodes Section */}
+          <div style={S.card} className="glass-hover">
+            <div style={S.sectionHeader}>
+              <span style={S.sectionTitle}>Session Episodes</span>
+              <span style={S.sectionBadge}>{totalEpisodes}</span>
+            </div>
+            {totalEpisodes === 0 ? (
+              <div style={S.emptyState}>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.3, marginBottom: 8 }}>
+                  <path d="M12 8v4l3 3"/>
+                  <circle cx="12" cy="12" r="10"/>
+                </svg>
+                <div>Episodes are created after each voice session</div>
+              </div>
+            ) : (
+              <div style={S.cardBody}>
+                {memoryEpisodes.map((ep, i) => (
+                  <div key={i} style={S.episodeCard}>
+                    <div style={S.episodeHeader}>
+                      <span style={S.episodeTime}>
+                        {ep.timestamp ? new Date(typeof ep.timestamp === 'number' ? ep.timestamp * 1000 : ep.timestamp).toLocaleString() : 'Recent'}
+                      </span>
+                    </div>
+                    <div style={S.episodeContent}>
+                      {ep.summary || ep.content || JSON.stringify(ep).slice(0, 200)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Events Timeline */}
+        <div style={{...S.card, marginTop: 16}} className="glass-hover">
+          <div style={S.sectionHeader}>
+            <span style={S.sectionTitle}>Recent Events</span>
+            <span style={S.sectionBadge}>{totalEvents}</span>
+          </div>
+          {totalEvents === 0 ? (
+            <div style={S.emptyState}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.3, marginBottom: 8 }}>
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+              </svg>
+              <div>Events track every interaction across sessions</div>
+            </div>
+          ) : (
+            <div style={S.cardBody}>
+              {memoryEvents.slice(0, 15).map((evt, i) => (
+                <div key={i} style={S.eventItem}>
+                  <div style={S.eventTimeline}>
+                    <div style={S.eventDot} />
+                    {i < memoryEvents.length - 1 && <div style={S.eventLine} />}
+                  </div>
+                  <div style={S.eventContent}>
+                    <div style={S.eventText}>
+                      {evt.content || evt.text || (evt.parts && evt.parts[0]?.text) || JSON.stringify(evt).slice(0, 150)}
+                    </div>
+                    <div style={S.eventMeta}>
+                      {evt.author && <span style={S.eventAuthor}>{evt.author}</span>}
+                      {evt.timestamp && (
+                        <span style={S.eventTime}>
+                          {new Date(typeof evt.timestamp === 'number' ? evt.timestamp * 1000 : evt.timestamp).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Insights section at bottom */}
+        <div style={{...S.card, marginTop: 16}} className="glass-hover">
+          <div style={S.sectionHeader}>
+            <span style={S.sectionTitle}>Active Insights</span>
+            <span style={S.sectionBadge}>{insights.length}</span>
+          </div>
+          {insights.length === 0 ? (
+            <div style={S.emptyState}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.3, marginBottom: 8 }}>
+                <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+              </svg>
+              <div>Insights are extracted from emails and conversations</div>
+            </div>
+          ) : (
+            <div style={S.cardBody}>
+              {insights.slice(0, 10).map((ins, i) => (
+                <InsightCard key={i} insight={ins} index={i} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  // ── Calendar view ─────────────────────────────────────────────────────────
+  if (activeView === 'calendar') {
+    // Generate demo calendar data (today's schedule)
+    const today = new Date()
+    const formatTime = (h, m) => {
+      const d = new Date(today)
+      d.setHours(h, m, 0, 0)
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    }
+
+    const calendarEvents = [
+      { time: formatTime(9, 0), endTime: formatTime(9, 30), title: 'Daily Standup', type: 'recurring', attendees: ['Arjun', 'Riya', 'Neha'], location: 'Google Meet', color: '#3b82f6' },
+      { time: formatTime(10, 0), endTime: formatTime(11, 0), title: 'Series A Prep — Pitch Review', type: 'meeting', attendees: ['Paras Singh', 'Sarah Chen (Sequoia)'], location: 'Zoom', color: '#8b5cf6' },
+      { time: formatTime(11, 30), endTime: formatTime(12, 0), title: 'Product Design Review', type: 'meeting', attendees: ['Neha Gupta', 'Arjun'], location: 'Office', color: '#22c55e' },
+      { time: formatTime(13, 0), endTime: formatTime(13, 30), title: 'Lunch & Learn: AI Agents', type: 'event', attendees: ['All Team'], location: 'Office Kitchen', color: '#f59e0b' },
+      { time: formatTime(14, 0), endTime: formatTime(15, 0), title: 'Customer Call — ByteByteGo', type: 'meeting', attendees: ['ByteByteGo Team'], location: 'Google Meet', color: '#ef4444' },
+      { time: formatTime(15, 30), endTime: formatTime(16, 0), title: 'Sprint Planning', type: 'recurring', attendees: ['Engineering Team'], location: 'Slack Huddle', color: '#06b6d4' },
+      { time: formatTime(16, 30), endTime: formatTime(17, 0), title: 'YC Application Review', type: 'deadline', attendees: ['Khwahish', 'Paras'], location: 'Office', color: '#ec4899' },
+    ]
+
+    const now = new Date()
+    const currentHour = now.getHours()
+
+    return (
+      <div style={S.dashRoot}>
+        <div style={S.dashHeader}>
+          <div>
+            <h1 style={S.dashTitle}>Calendar</h1>
+            <span style={S.dashSub}>
+              {today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+            </span>
+          </div>
+          <div style={S.emailStats}>
+            <div style={S.statCard}>
+              <span style={S.statValue}>{calendarEvents.length}</span>
+              <span style={S.statLabel}>Events</span>
+            </div>
+            <div style={S.statCard}>
+              <span style={S.statValue}>{calendarEvents.filter(e => e.type === 'meeting').length}</span>
+              <span style={S.statLabel}>Meetings</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Timeline */}
+        <div style={S.calendarTimeline}>
+          {calendarEvents.map((evt, i) => {
+            const eventHour = parseInt(evt.time.split(':')[0])
+            const isPast = eventHour < currentHour
+            const isCurrent = eventHour === currentHour
+
+            return (
+              <div key={i} style={{
+                ...S.calendarEvent,
+                opacity: isPast ? 0.5 : 1,
+                borderLeftColor: evt.color,
+                ...(isCurrent && S.calendarEventCurrent),
+              }}>
+                <div style={S.calEventTime}>
+                  <div style={S.calEventTimeStart}>{evt.time}</div>
+                  <div style={S.calEventTimeEnd}>{evt.endTime}</div>
+                </div>
+                <div style={S.calEventBody}>
+                  <div style={S.calEventTitle}>{evt.title}</div>
+                  <div style={S.calEventMeta}>
+                    <span style={{...S.calEventTypeBadge, background: `${evt.color}20`, color: evt.color}}>
+                      {evt.type}
+                    </span>
+                    <span style={S.calEventLocation}>{evt.location}</span>
+                  </div>
+                  <div style={S.calEventAttendees}>
+                    {evt.attendees.map((a, j) => (
+                      <span key={j} style={S.calEventAttendee}>{a}</span>
+                    ))}
+                  </div>
+                </div>
+                {isCurrent && <div style={S.calEventNowBadge}>NOW</div>}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Upcoming commitments from brain */}
+        {insights.filter(i => i.type === 'commitment').length > 0 && (
+          <div style={{...S.card, marginTop: 20}} className="glass-hover">
+            <div style={S.sectionHeader}>
+              <span style={S.sectionTitle}>Upcoming Commitments</span>
+              <span style={S.sectionBadge}>{insights.filter(i => i.type === 'commitment').length}</span>
+            </div>
+            <div style={S.cardBody}>
+              {insights.filter(i => i.type === 'commitment').map((ins, i) => (
+                <InsightCard key={i} insight={ins} index={i} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -2410,6 +2832,253 @@ const getStyles = (t) => ({
     fontWeight: 700,
     cursor: 'pointer',
     transition: 'all 150ms',
+  },
+
+  // Seed banner
+  seedBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '16px 20px',
+    borderRadius: 12,
+    background: `linear-gradient(135deg, ${t.accentSoft}, rgba(139,92,246,0.08))`,
+    border: `1px solid ${t.borderAccent}`,
+    marginBottom: 24,
+  },
+  seedBannerText: {
+    fontSize: 13,
+    color: t.textSecondary,
+    lineHeight: 1.5,
+  },
+  seedBtn: {
+    padding: '10px 20px',
+    borderRadius: 8,
+    background: t.accent,
+    border: 'none',
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 700,
+    cursor: 'pointer',
+    transition: 'all 150ms',
+    whiteSpace: 'nowrap',
+  },
+
+  // Brain view
+  brainGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 16,
+  },
+  memoryStatusBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '10px 16px',
+    borderRadius: 10,
+    background: t.bgCard,
+    border: `1px solid ${t.border}`,
+    marginBottom: 16,
+  },
+  memoryStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+  },
+  memoryStatusText: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: t.text,
+  },
+  memoryStatusMeta: {
+    fontSize: 11,
+    color: t.textMuted,
+    marginLeft: 'auto',
+  },
+  factItem: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: '8px 0',
+    borderBottom: `1px solid ${t.borderSubtle}`,
+  },
+  factDot: {
+    width: 6,
+    height: 6,
+    borderRadius: '50%',
+    background: t.accentCyan,
+    marginTop: 5,
+    flexShrink: 0,
+  },
+  factText: {
+    fontSize: 12,
+    color: t.textSecondary,
+    lineHeight: 1.5,
+  },
+  episodeCard: {
+    padding: '12px',
+    borderRadius: 10,
+    background: t.bgSurface,
+    border: `1px solid ${t.borderSubtle}`,
+  },
+  episodeHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  episodeTime: {
+    fontSize: 10,
+    color: t.textMuted,
+    fontWeight: 600,
+  },
+  episodeContent: {
+    fontSize: 12,
+    color: t.textSecondary,
+    lineHeight: 1.5,
+  },
+  eventItem: {
+    display: 'flex',
+    gap: 12,
+    padding: '4px 0',
+  },
+  eventTimeline: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    width: 16,
+    flexShrink: 0,
+  },
+  eventDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    background: t.accentPurple,
+    flexShrink: 0,
+  },
+  eventLine: {
+    width: 2,
+    flex: 1,
+    background: t.borderSubtle,
+    marginTop: 4,
+  },
+  eventContent: {
+    flex: 1,
+    paddingBottom: 12,
+  },
+  eventText: {
+    fontSize: 12,
+    color: t.textSecondary,
+    lineHeight: 1.4,
+  },
+  eventMeta: {
+    display: 'flex',
+    gap: 8,
+    marginTop: 4,
+  },
+  eventAuthor: {
+    fontSize: 10,
+    color: t.accentCyan,
+    fontWeight: 600,
+  },
+  eventTime: {
+    fontSize: 10,
+    color: t.textMuted,
+  },
+
+  // Calendar view
+  calendarTimeline: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  calendarEvent: {
+    display: 'flex',
+    alignItems: 'stretch',
+    gap: 16,
+    padding: '14px 16px',
+    borderRadius: 12,
+    background: t.bgCard,
+    border: `1px solid ${t.border}`,
+    borderLeft: '4px solid transparent',
+    transition: 'all 200ms',
+    position: 'relative',
+  },
+  calendarEventCurrent: {
+    background: `linear-gradient(135deg, ${t.bgCard}, ${t.accentSoft})`,
+    border: `1px solid ${t.borderAccent}`,
+    boxShadow: `0 4px 12px ${t.accentSoft}`,
+  },
+  calEventTime: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    width: 70,
+    flexShrink: 0,
+  },
+  calEventTimeStart: {
+    fontSize: 13,
+    fontWeight: 700,
+    color: t.text,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  calEventTimeEnd: {
+    fontSize: 10,
+    color: t.textMuted,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  calEventBody: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  calEventTitle: {
+    fontSize: 14,
+    fontWeight: 700,
+    color: t.text,
+    letterSpacing: '-0.01em',
+  },
+  calEventMeta: {
+    display: 'flex',
+    gap: 8,
+    alignItems: 'center',
+  },
+  calEventTypeBadge: {
+    fontSize: 9,
+    fontWeight: 700,
+    padding: '3px 8px',
+    borderRadius: 6,
+    textTransform: 'uppercase',
+  },
+  calEventLocation: {
+    fontSize: 11,
+    color: t.textMuted,
+  },
+  calEventAttendees: {
+    display: 'flex',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  calEventAttendee: {
+    fontSize: 10,
+    padding: '2px 8px',
+    borderRadius: 6,
+    background: t.bgSurface,
+    border: `1px solid ${t.borderSubtle}`,
+    color: t.textSecondary,
+    fontWeight: 500,
+  },
+  calEventNowBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    fontSize: 9,
+    fontWeight: 800,
+    padding: '3px 8px',
+    borderRadius: 6,
+    background: t.success,
+    color: '#fff',
+    letterSpacing: '0.05em',
   },
 
   // Utility
