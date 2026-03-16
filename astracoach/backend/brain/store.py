@@ -48,6 +48,9 @@ COL_RELATIONSHIPS = "brain_relationships"
 COL_TASKS         = "brain_tasks"
 COL_ALERTS        = "brain_alerts"
 COL_FOUNDERS      = "brain_founders"
+COL_TEAMS         = "brain_teams"
+COL_ROUTING_RULES = "brain_routing_rules"
+COL_ROUTED_EMAILS = "brain_routed_emails"
 
 
 class CompanyBrainStore:
@@ -323,4 +326,181 @@ class CompanyBrainStore:
             lambda: self._db.collection(COL_ALERTS)
                              .document(alert_id)
                              .update({"status": AlertStatus.DISMISSED.value})
+        )
+
+    # ── Enhanced Task Methods ──────────────────────────────────────────────
+
+    async def get_all_tasks(self, founder_id: str) -> list:
+        """Get ALL tasks (all statuses) for the founder."""
+        def _query():
+            return list(
+                self._db.collection(COL_TASKS)
+                        .where(filter=FieldFilter("founder_id", "==", founder_id))
+                        .limit(200)
+                        .stream()
+            )
+        docs = await self._run(_query)
+        tasks = [Task.from_firestore(d.to_dict()) for d in docs]
+        tasks.sort(key=lambda t: t.created_at or 0, reverse=True)
+        return tasks
+
+    async def update_task(self, task_id: str, updates: dict) -> None:
+        """Update arbitrary task fields."""
+        updates["updated_at"] = time.time()
+        await self._run(
+            lambda: self._db.collection(COL_TASKS)
+                             .document(task_id)
+                             .update(updates)
+        )
+
+    async def add_task_comment(self, task_id: str, text: str, author: str) -> None:
+        """Add a comment to a task."""
+        from google.cloud.firestore_v1 import ArrayUnion
+        comment = {"text": text, "author": author, "created_at": time.time()}
+        await self._run(
+            lambda: self._db.collection(COL_TASKS)
+                             .document(task_id)
+                             .update({
+                                 "comments": ArrayUnion([comment]),
+                                 "updated_at": time.time(),
+                             })
+        )
+
+    async def get_tasks_by_status(self, founder_id: str, status: str) -> list:
+        """Get tasks filtered by status."""
+        def _query():
+            return list(
+                self._db.collection(COL_TASKS)
+                        .where(filter=FieldFilter("founder_id", "==", founder_id))
+                        .where(filter=FieldFilter("status", "==", status))
+                        .limit(100)
+                        .stream()
+            )
+        docs = await self._run(_query)
+        return [Task.from_firestore(d.to_dict()) for d in docs]
+
+    async def get_tasks_by_assignee(self, founder_id: str, assignee: str) -> list:
+        """Get tasks for a specific assignee."""
+        def _query():
+            return list(
+                self._db.collection(COL_TASKS)
+                        .where(filter=FieldFilter("founder_id", "==", founder_id))
+                        .where(filter=FieldFilter("assignee", "==", assignee))
+                        .limit(100)
+                        .stream()
+            )
+        docs = await self._run(_query)
+        return [Task.from_firestore(d.to_dict()) for d in docs]
+
+    # ── Teams ──────────────────────────────────────────────────────────────
+
+    async def add_team(self, team) -> str:
+        await self._run(
+            lambda: self._db.collection(COL_TEAMS)
+                             .document(team.id)
+                             .set(team.to_firestore())
+        )
+        return team.id
+
+    async def get_teams(self, founder_id: str) -> list:
+        def _query():
+            return list(
+                self._db.collection(COL_TEAMS)
+                        .where(filter=FieldFilter("founder_id", "==", founder_id))
+                        .stream()
+            )
+        docs = await self._run(_query)
+        from .models import Team
+        return [Team.from_firestore(d.to_dict()) for d in docs]
+
+    async def update_team(self, team_id: str, updates: dict) -> None:
+        await self._run(
+            lambda: self._db.collection(COL_TEAMS)
+                             .document(team_id)
+                             .update(updates)
+        )
+
+    async def delete_team(self, team_id: str) -> None:
+        await self._run(
+            lambda: self._db.collection(COL_TEAMS)
+                             .document(team_id)
+                             .delete()
+        )
+
+    # ── Routing Rules ──────────────────────────────────────────────────────
+
+    async def add_routing_rule(self, rule) -> str:
+        await self._run(
+            lambda: self._db.collection(COL_ROUTING_RULES)
+                             .document(rule.id)
+                             .set(rule.to_firestore())
+        )
+        return rule.id
+
+    async def get_routing_rules(self, founder_id: str) -> list:
+        def _query():
+            return list(
+                self._db.collection(COL_ROUTING_RULES)
+                        .where(filter=FieldFilter("founder_id", "==", founder_id))
+                        .stream()
+            )
+        docs = await self._run(_query)
+        from .models import RoutingRule
+        rules = [RoutingRule.from_firestore(d.to_dict()) for d in docs]
+        rules.sort(key=lambda r: r.priority)
+        return rules
+
+    async def update_routing_rule(self, rule_id: str, updates: dict) -> None:
+        await self._run(
+            lambda: self._db.collection(COL_ROUTING_RULES)
+                             .document(rule_id)
+                             .update(updates)
+        )
+
+    async def delete_routing_rule(self, rule_id: str) -> None:
+        await self._run(
+            lambda: self._db.collection(COL_ROUTING_RULES)
+                             .document(rule_id)
+                             .delete()
+        )
+
+    # ── Routed Emails ──────────────────────────────────────────────────────
+
+    async def add_routed_email(self, routed_email) -> str:
+        await self._run(
+            lambda: self._db.collection(COL_ROUTED_EMAILS)
+                             .document(routed_email.id)
+                             .set(routed_email.to_firestore())
+        )
+        return routed_email.id
+
+    async def get_routed_emails(self, founder_id: str, limit: int = 50) -> list:
+        def _query():
+            return list(
+                self._db.collection(COL_ROUTED_EMAILS)
+                        .where(filter=FieldFilter("founder_id", "==", founder_id))
+                        .order_by("routed_at", direction="DESCENDING")
+                        .limit(limit)
+                        .stream()
+            )
+        try:
+            docs = await self._run(_query)
+        except Exception:
+            # Fallback if index not ready
+            def _fallback():
+                return list(
+                    self._db.collection(COL_ROUTED_EMAILS)
+                            .where(filter=FieldFilter("founder_id", "==", founder_id))
+                            .limit(limit)
+                            .stream()
+                )
+            docs = await self._run(_fallback)
+        from .models import RoutedEmail
+        return [RoutedEmail.from_firestore(d.to_dict()) for d in docs]
+
+    async def update_routed_email(self, email_id: str, updates: dict) -> None:
+        await self._run(
+            lambda: self._db.collection(COL_ROUTED_EMAILS)
+                             .document(email_id)
+                             .update(updates)
         )

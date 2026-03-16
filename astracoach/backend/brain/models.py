@@ -49,6 +49,13 @@ class TaskStatus(str, Enum):
     DONE        = "done"
 
 
+class TaskPriority(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
 class AlertSeverity(str, Enum):
     LOW      = "low"
     MEDIUM   = "medium"
@@ -211,6 +218,10 @@ class Task:
     assignee:          str   = ""          # name or email of the person responsible
     due_date:          Optional[str] = None
     status:            TaskStatus = TaskStatus.PENDING
+    priority:          str   = "medium"    # "low" | "medium" | "high" | "urgent"
+    tags:              list[str] = field(default_factory=list)  # e.g. ["frontend", "backend"]
+    completed_at:      Optional[float] = None
+    comments:          list[dict] = field(default_factory=list)  # [{text, author, created_at}]
     source_insight_id: Optional[str] = None    # which Insight created this
     created_at:        float = field(default_factory=time.time)
     updated_at:        float = field(default_factory=time.time)
@@ -225,6 +236,10 @@ class Task:
             "assignee":          self.assignee,
             "due_date":          self.due_date,
             "status":            self.status.value,
+            "priority":          self.priority,
+            "tags":              self.tags,
+            "completed_at":      self.completed_at,
+            "comments":          self.comments,
             "source_insight_id": self.source_insight_id,
             "created_at":        self.created_at,
             "updated_at":        self.updated_at,
@@ -241,6 +256,10 @@ class Task:
             assignee          = data.get("assignee", ""),
             due_date          = data.get("due_date"),
             status            = TaskStatus(data.get("status", "pending")),
+            priority          = data.get("priority", "medium"),
+            tags              = data.get("tags", []),
+            completed_at      = data.get("completed_at"),
+            comments          = data.get("comments", []),
             source_insight_id = data.get("source_insight_id"),
             created_at        = data.get("created_at", time.time()),
             updated_at        = data.get("updated_at", time.time()),
@@ -374,4 +393,149 @@ class FounderProfile:
             timezone        = data.get("timezone", "UTC"),
             created_at      = data.get("created_at", time.time()),
             last_active     = data.get("last_active", time.time()),
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Email Routing Models
+# ─────────────────────────────────────────────────────────────────────────────
+
+class EmailCategory(str, Enum):
+    SALES = "sales"
+    SUPPORT = "support"
+    ENGINEERING = "engineering"
+    PARTNERSHIPS = "partnerships"
+    HR = "hr"
+    FINANCE = "finance"
+    PERSONAL = "personal"
+    SPAM = "spam"
+
+
+class EmailUrgency(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+@dataclass
+class Team:
+    founder_id: str
+    name: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    members: list[dict] = field(default_factory=list)  # [{name, email, role}]
+    color: str = "#4f7dff"
+    email_alias: str = ""
+    created_at: float = field(default_factory=time.time)
+
+    def to_firestore(self) -> dict:
+        return {
+            "id": self.id, "founder_id": self.founder_id,
+            "name": self.name, "members": self.members,
+            "color": self.color, "email_alias": self.email_alias,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_firestore(cls, data: dict) -> "Team":
+        return cls(
+            id=data["id"], founder_id=data["founder_id"],
+            name=data["name"], members=data.get("members", []),
+            color=data.get("color", "#4f7dff"),
+            email_alias=data.get("email_alias", ""),
+            created_at=data.get("created_at", time.time()),
+        )
+
+
+@dataclass
+class RoutingRule:
+    founder_id: str
+    name: str
+    team_id: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    conditions: dict = field(default_factory=dict)  # {category, keywords, sender_domains}
+    priority: int = 10
+    enabled: bool = True
+    auto_assign_to: str = ""  # specific member email or "" for round-robin
+    created_at: float = field(default_factory=time.time)
+
+    def to_firestore(self) -> dict:
+        return {
+            "id": self.id, "founder_id": self.founder_id,
+            "name": self.name, "team_id": self.team_id,
+            "conditions": self.conditions, "priority": self.priority,
+            "enabled": self.enabled, "auto_assign_to": self.auto_assign_to,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_firestore(cls, data: dict) -> "RoutingRule":
+        return cls(
+            id=data["id"], founder_id=data["founder_id"],
+            name=data["name"], team_id=data["team_id"],
+            conditions=data.get("conditions", {}),
+            priority=data.get("priority", 10),
+            enabled=data.get("enabled", True),
+            auto_assign_to=data.get("auto_assign_to", ""),
+            created_at=data.get("created_at", time.time()),
+        )
+
+
+@dataclass
+class RoutedEmail:
+    founder_id: str
+    email_id: str
+    sender: str
+    sender_email: str
+    subject: str
+    snippet: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    category: str = "personal"
+    confidence: float = 0.0
+    urgency: str = "medium"
+    sentiment: str = "neutral"
+    routed_to_team: str = ""
+    routed_to_team_name: str = ""
+    assigned_to: str = ""
+    status: str = "new"  # new|assigned|in_progress|resolved|archived
+    routing_method: str = "ai"  # ai|rule|manual
+    routed_at: float = field(default_factory=time.time)
+    resolved_at: Optional[float] = None
+
+    def to_firestore(self) -> dict:
+        return {
+            "id": self.id, "founder_id": self.founder_id,
+            "email_id": self.email_id, "sender": self.sender,
+            "sender_email": self.sender_email, "subject": self.subject,
+            "snippet": self.snippet, "category": self.category,
+            "confidence": self.confidence, "urgency": self.urgency,
+            "sentiment": self.sentiment,
+            "routed_to_team": self.routed_to_team,
+            "routed_to_team_name": self.routed_to_team_name,
+            "assigned_to": self.assigned_to, "status": self.status,
+            "routing_method": self.routing_method,
+            "routed_at": self.routed_at, "resolved_at": self.resolved_at,
+        }
+
+    @classmethod
+    def from_firestore(cls, data: dict) -> "RoutedEmail":
+        return cls(
+            id=data["id"],
+            founder_id=data["founder_id"],
+            email_id=data["email_id"],
+            sender=data["sender"],
+            sender_email=data["sender_email"],
+            subject=data["subject"],
+            snippet=data["snippet"],
+            category=data.get("category", "personal"),
+            confidence=data.get("confidence", 0.0),
+            urgency=data.get("urgency", "medium"),
+            sentiment=data.get("sentiment", "neutral"),
+            routed_to_team=data.get("routed_to_team", ""),
+            routed_to_team_name=data.get("routed_to_team_name", ""),
+            assigned_to=data.get("assigned_to", ""),
+            status=data.get("status", "new"),
+            routing_method=data.get("routing_method", "ai"),
+            routed_at=data.get("routed_at", time.time()),
+            resolved_at=data.get("resolved_at"),
         )

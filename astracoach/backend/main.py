@@ -25,6 +25,8 @@ import base64
 import json
 import os
 import time
+import uuid
+import re
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -342,11 +344,17 @@ async def generate_avatar(req: GenerateAvatarRequest):
         except Exception as gem_err:
             print(f"[Avatar] Fallback {fallback_model} failed: {gem_err}")
 
-    # If we got here, everything failed
-    raise HTTPException(
-        status_code=500,
-        detail="Avatar generation failed across all models. Please ensure your API key has Image generation enabled.",
-    )
+    # If we got here, everything failed — return a graceful "no image" response
+    # instead of a 500 so the frontend falls back to the SVG orb cleanly.
+    print("[Avatar] ⚠️  All image models failed — returning fallback (SVG orb will be used)")
+    return {
+        "success": False,
+        "image": None,
+        "mime_type": None,
+        "model": "none",
+        "fallback": True,
+        "reason": "All image generation models unavailable. Upgrade to a paid Google AI plan for Imagen, or wait for free-tier quota to reset for Gemini Flash.",
+    }
 
 
 @app.post("/api/session/create")
@@ -782,6 +790,323 @@ async def get_relationships():
     return [{"contact_email": p.contact_email, "name": p.name,
              "health_score": p.health_score, "tone_trend": p.tone_trend.value,
              "interaction_count": p.interaction_count} for p in profiles]
+
+
+# ─────────────────────────────────────────────
+# CRM Pipeline & Team Tasks
+# ─────────────────────────────────────────────
+
+@app.get("/brain/pipeline")
+async def get_pipeline():
+    """CRM-style pipeline built from relationship health data."""
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    if not _brain_tool_fns or "get_sales_pipeline" not in _brain_tool_fns:
+        raise HTTPException(503, "Pipeline tool not available")
+    return await _brain_tool_fns["get_sales_pipeline"]()
+
+
+@app.get("/brain/team-tasks")
+async def get_team_tasks(assignee: str = ""):
+    """Get tasks filtered by assignee (or all if empty)."""
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    if not _brain_tool_fns or "get_team_tasks" not in _brain_tool_fns:
+        raise HTTPException(503, "Team tasks tool not available")
+    return await _brain_tool_fns["get_team_tasks"](assignee=assignee)
+
+
+@app.post("/brain/tasks/create")
+async def create_brain_task(title: str, assignee: str = "", due_date: str = "", description: str = ""):
+    """Create a new task via REST (as alternative to voice)."""
+    if not _brain_tool_fns or "create_task" not in _brain_tool_fns:
+        raise HTTPException(503, "Task creation not available")
+    return await _brain_tool_fns["create_task"](
+        title=title, assignee=assignee, due_date=due_date, description=description
+    )
+
+
+@app.get("/brain/meeting-prep")
+async def get_meeting_prep(contact_email: str = "", meeting_title: str = ""):
+    """Get a comprehensive briefing for an upcoming meeting."""
+    if not _brain_tool_fns or "get_meeting_prep" not in _brain_tool_fns:
+        raise HTTPException(503, "Meeting prep tool not available")
+    return await _brain_tool_fns["get_meeting_prep"](
+        contact_email=contact_email, meeting_title=meeting_title
+    )
+
+
+@app.get("/brain/weekly-digest")
+async def get_weekly_digest():
+    """Generate a comprehensive weekly status digest."""
+    if not _brain_tool_fns or "get_weekly_digest" not in _brain_tool_fns:
+        raise HTTPException(503, "Weekly digest tool not available")
+    return await _brain_tool_fns["get_weekly_digest"]()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enhanced Task API
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/brain/tasks/all")
+async def get_all_tasks():
+    """Get all tasks (all statuses) with optional filters."""
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    tasks = await _brain_store.get_all_tasks(FOUNDER_ID)
+    return [t.to_firestore() for t in tasks]
+
+
+@app.post("/brain/tasks/{task_id}/comment")
+async def add_task_comment(task_id: str, body: dict):
+    """Add a comment to a task."""
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    text = body.get("text", "")
+    author = body.get("author", "Founder")
+    if not text:
+        raise HTTPException(400, "Comment text is required")
+    await _brain_store.add_task_comment(task_id, text, author)
+    return {"ok": True}
+
+
+@app.patch("/brain/tasks/{task_id}")
+async def update_task_fields(task_id: str, body: dict):
+    """Update task fields (status, priority, assignee, tags, etc.)."""
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    allowed = {"title", "description", "assignee", "due_date", "status", "priority", "tags", "notes"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if "status" in updates and updates["status"] == "done":
+        updates["completed_at"] = time.time()
+    if updates:
+        await _brain_store.update_task(task_id, updates)
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Teams API
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/brain/teams")
+async def get_teams():
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    teams = await _brain_store.get_teams(FOUNDER_ID)
+    return [t.to_firestore() for t in teams]
+
+
+@app.post("/brain/teams")
+async def create_team(body: dict):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    from brain.models import Team
+    team = Team(
+        founder_id=FOUNDER_ID,
+        name=body["name"],
+        members=body.get("members", []),
+        color=body.get("color", "#4f7dff"),
+        email_alias=body.get("email_alias", ""),
+    )
+    await _brain_store.add_team(team)
+    return team.to_firestore()
+
+
+@app.patch("/brain/teams/{team_id}")
+async def update_team(team_id: str, body: dict):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    allowed = {"name", "members", "color", "email_alias"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if updates:
+        await _brain_store.update_team(team_id, updates)
+    return {"ok": True}
+
+
+@app.delete("/brain/teams/{team_id}")
+async def delete_team(team_id: str):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    await _brain_store.delete_team(team_id)
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Email Routing API
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/brain/emails/classify")
+async def classify_email(body: dict):
+    """Use Gemini to classify an email and route it to the right team."""
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+
+    sender = body.get("sender", "")
+    subject = body.get("subject", "")
+    snippet = body.get("snippet", "")
+    email_id = body.get("email_id", str(uuid.uuid4()))
+    sender_email = body.get("sender_email", sender)
+
+    # Get teams and routing rules
+    teams = await _brain_store.get_teams(FOUNDER_ID)
+    rules = await _brain_store.get_routing_rules(FOUNDER_ID)
+    team_names = [t.name for t in teams] or ["Sales", "Support", "Engineering"]
+
+    # Ask Gemini to classify
+    prompt = f"""Classify this email into ONE category and determine urgency.
+
+Sender: {sender}
+Subject: {subject}
+Preview: {snippet[:500]}
+
+Categories: sales, support, engineering, partnerships, hr, finance, personal, spam
+Available teams: {', '.join(team_names)}
+
+Return JSON only:
+{{"category": "...", "urgency": "low|medium|high|critical", "sentiment": "positive|neutral|negative", "confidence": 0.95, "suggested_team": "...", "reasoning": "..."}}"""
+
+    try:
+        import google.genai as genai
+        api_key = os.environ.get("GOOGLE_API_KEY", "")
+        client = genai.Client(api_key=api_key)
+        resp = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
+        raw = (resp.text or "").strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw).strip()
+        classification = json.loads(raw)
+    except Exception as e:
+        print(f"[EmailRouting] Classification failed: {e}")
+        classification = {
+            "category": "personal", "urgency": "medium",
+            "sentiment": "neutral", "confidence": 0.0,
+            "suggested_team": "", "reasoning": "Classification failed"
+        }
+
+    # Match to team
+    suggested = classification.get("suggested_team", "")
+    matched_team = next((t for t in teams if t.name.lower() == suggested.lower()), None)
+
+    # Check routing rules
+    routing_method = "ai"
+    for rule in rules:
+        if not rule.enabled:
+            continue
+        conds = rule.conditions
+        cat_match = not conds.get("category") or conds["category"] == classification["category"]
+        kw_match = not conds.get("keywords") or any(kw.lower() in (subject + " " + snippet).lower() for kw in conds["keywords"])
+        domain_match = not conds.get("sender_domains") or any(d in sender_email for d in conds["sender_domains"])
+        if cat_match and kw_match and domain_match:
+            matched_team = next((t for t in teams if t.id == rule.team_id), matched_team)
+            routing_method = "rule"
+            break
+
+    # Store routed email
+    from brain.models import RoutedEmail
+    routed = RoutedEmail(
+        founder_id=FOUNDER_ID,
+        email_id=email_id,
+        sender=sender,
+        sender_email=sender_email,
+        subject=subject,
+        snippet=snippet[:300],
+        category=classification.get("category", "personal"),
+        confidence=classification.get("confidence", 0.0),
+        urgency=classification.get("urgency", "medium"),
+        sentiment=classification.get("sentiment", "neutral"),
+        routed_to_team=matched_team.id if matched_team else "",
+        routed_to_team_name=matched_team.name if matched_team else "",
+        assigned_to=matched_team.members[0].get("email", "") if matched_team and matched_team.members else "",
+        routing_method=routing_method,
+    )
+    await _brain_store.add_routed_email(routed)
+
+    return {
+        "id": routed.id,
+        "classification": classification,
+        "routed_to": {
+            "team": matched_team.name if matched_team else None,
+            "assigned_to": routed.assigned_to,
+        },
+        "routing_method": routing_method,
+    }
+
+
+@app.get("/brain/emails/routed")
+async def get_routed_emails(limit: int = 50):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    emails = await _brain_store.get_routed_emails(FOUNDER_ID, limit)
+    return [e.to_firestore() for e in emails]
+
+
+@app.post("/brain/emails/{email_id}/reassign")
+async def reassign_email(email_id: str, body: dict):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    team_id = body.get("team_id", "")
+    team_name = body.get("team_name", "")
+    assigned_to = body.get("assigned_to", "")
+    await _brain_store.update_routed_email(email_id, {
+        "routed_to_team": team_id,
+        "routed_to_team_name": team_name,
+        "assigned_to": assigned_to,
+        "routing_method": "manual",
+    })
+    return {"ok": True}
+
+
+@app.patch("/brain/emails/{email_id}")
+async def update_routed_email(email_id: str, body: dict):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    allowed = {"status", "assigned_to", "routed_to_team", "routed_to_team_name"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if "status" in updates and updates["status"] == "resolved":
+        updates["resolved_at"] = time.time()
+    if updates:
+        await _brain_store.update_routed_email(email_id, updates)
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Routing Rules API
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/brain/routing-rules")
+async def get_routing_rules():
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    rules = await _brain_store.get_routing_rules(FOUNDER_ID)
+    return [r.to_firestore() for r in rules]
+
+
+@app.post("/brain/routing-rules")
+async def create_routing_rule(body: dict):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    from brain.models import RoutingRule
+    rule = RoutingRule(
+        founder_id=FOUNDER_ID,
+        name=body["name"],
+        team_id=body["team_id"],
+        conditions=body.get("conditions", {}),
+        priority=body.get("priority", 10),
+        auto_assign_to=body.get("auto_assign_to", ""),
+    )
+    await _brain_store.add_routing_rule(rule)
+    return rule.to_firestore()
+
+
+@app.delete("/brain/routing-rules/{rule_id}")
+async def delete_routing_rule(rule_id: str):
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    await _brain_store.delete_routing_rule(rule_id)
+    return {"ok": True}
 
 
 # ─────────────────────────────────────────────

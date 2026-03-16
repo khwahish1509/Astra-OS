@@ -235,9 +235,9 @@ Rules:
     client = genai.Client(api_key=api_key)
 
     # ── Model fallback chain ────────────────────────────────────────────────
-    # gemini-2.0-flash is preferred (fast + cheap), but falls back to
-    # gemini-1.5-flash if the free-tier quota is exhausted on the first model.
-    SUMMARIZE_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"]
+    # gemini-2.0-flash is preferred (fast + cheap).  Fallbacks use models
+    # that are confirmed available on the v1beta API.
+    SUMMARIZE_MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-2.5-flash"]
     MAX_RETRIES = 2    # attempts per model before giving up on that model
     RETRY_CAP   = 65   # max seconds to wait between retries
 

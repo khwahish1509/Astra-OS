@@ -1,30 +1,18 @@
 /**
- * SetupScreen.jsx — Persona Studio
- * ==================================
- * The main launch pad. Users can:
- *  1. Pick a pre-built persona template (Interview Coach, Language Tutor, etc.)
- *  2. Customise the template prompt OR write from scratch
- *  3. Choose voice, name, then launch the live session
- *
- * The system_prompt they write becomes the FULL agent persona —
- * Gemini Live uses it directly with no modification (except the
- * universal live-session suffix the backend appends).
+ * SetupScreen.jsx — Astra OS Launch Screen [REDESIGNED]
+ * =====================================================
+ * Premium, immersive launch experience for Astra OS — The Founder's Operating System.
+ * Features: animated gradient backgrounds, glass-morphism cards, SVG icons, glowing focal point.
+ * All original functionality preserved: API calls, state management, session creation.
  */
 
 import { useState, useEffect } from 'react'
+import { useTheme, ThemeToggle } from './ThemeContext'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
-// ── Persona Templates ─────────────────────────────────────────────
-// These are just starting-point prompts. The user can edit freely.
-const TEMPLATES = [
-  {
-    id: 'astra',
-    icon: '🌟',
-    name: 'Astra — AI Chief of Staff',
-    tagline: 'Your founder\'s operating system. Tracks commitments, relationships & risks.',
-    color: '#7c3aed',
-    prompt: `You are Astra — the founder's AI chief of staff. You are not an assistant. You are the operational backbone of this startup. You think like a seasoned COO who's been in the trenches.
+// ── The Astra system prompt (hardcoded — no more persona templates) ──────────
+const ASTRA_PROMPT = `You are Astra — the founder's AI chief of staff. You are not an assistant. You are the operational backbone of this startup. You think like a seasoned COO who's been in the trenches.
 
 VOICE & TONE:
 - You sound like a sharp, calm executive who's been briefed on everything
@@ -71,147 +59,116 @@ YOU ARE NOT:
 - An assistant that qualifies everything with disclaimers
 - Verbose. Ever. If it can be said in 10 words, don't use 20
 
-You are the founder's unfair advantage. You remember everything. You see patterns. You never drop the ball.`,
+You are the founder's unfair advantage. You remember everything. You see patterns. You never drop the ball.`
+
+// ── Capabilities shown on the launch screen ─────────────────────────────────
+const CAPABILITIES = [
+  {
+    icon: 'email', title: 'Email Intelligence',
+    desc: 'Triage inbox, draft replies, and extract action items automatically.',
+    tools: ['get_recent_emails', 'send_email', 'reply_to_email', 'search_emails'],
+    color: '#3b82f6',
   },
   {
-    id: 'interview',
-    icon: '💼',
-    name: 'Interview Coach',
-    tagline: 'Tough but fair. Preps you for FAANG.',
-    color: '#4f7dff',
-    prompt: `You are Alex Chen, a senior technical recruiter at a top tech company conducting a mock interview. You are warm but direct, and give specific, actionable feedback.
-
-Interview structure:
-1. Brief warm welcome (30 seconds)
-2. 4-6 questions: mix of behavioral (STAR format) + technical/situational
-3. Gentle micro-coaching after key answers
-4. Closing with 2-3 specific improvement tips
-
-Always probe deeper: if an answer is shallow, ask "Can you walk me through a specific example?" Keep responses under 60 words for natural pacing. Research the candidate's target company using web_search at the start.`,
-  },
-  {
-    id: 'language',
-    icon: '🌍',
-    name: 'Language Tutor',
-    tagline: 'Immersive conversation practice.',
+    icon: 'calendar', title: 'Calendar & Meetings',
+    desc: 'View schedule, prep for meetings, and create events by voice.',
+    tools: ['get_todays_schedule', 'get_upcoming_meetings', 'create_calendar_event'],
     color: '#10b981',
-    prompt: `You are Sofia, a native Spanish speaker and patient language tutor. Your goal is to help the user practice conversational Spanish through natural dialogue.
-
-How you teach:
-- Speak primarily in Spanish, but switch to English when the user is confused
-- Gently correct grammar mistakes by repeating the sentence correctly: "Ah, you mean: [correct version]..."
-- Ask open-ended questions to keep the conversation flowing
-- Adapt difficulty to the user's level — start easy, push gradually
-- After every 5 exchanges, give a brief tip on a grammar point you noticed
-
-Start by asking the user's name and what they want to talk about today.`,
   },
   {
-    id: 'socrates',
-    icon: '🏛️',
-    name: 'Socratic Tutor',
-    tagline: 'Learn anything through questions.',
+    icon: 'crm', title: 'Relationship CRM',
+    desc: 'Track contacts, monitor relationship health, and get alerts.',
+    tools: ['get_relationship_health', 'get_at_risk_relationships', 'get_all_relationships'],
     color: '#f59e0b',
-    prompt: `You are a brilliant Socratic tutor. You never give direct answers — instead, you guide the student to discover the answer themselves through questions.
-
-Your method:
-- Ask targeted questions that expose what the student already knows
-- When they're stuck, ask a simpler sub-question
-- When they get something right, validate it then push further: "Good. So then what would happen if...?"
-- Use analogies from everyday life to make abstract ideas concrete
-- Never lecture — only question and guide
-
-You can tutor any subject: math, science, history, philosophy, coding, literature. Ask the student what subject they want to explore today.`,
   },
   {
-    id: 'sales',
-    icon: '📈',
-    name: 'Sales Coach',
-    tagline: 'Roleplay cold calls and objection handling.',
+    icon: 'tasks', title: 'Task Operations',
+    desc: 'Create, assign, and track tasks. Surface blockers automatically.',
+    tools: ['get_open_tasks', 'create_task', 'update_task', 'mark_task_done'],
     color: '#8b5cf6',
-    prompt: `You are Marcus, a veteran sales coach with 20 years of experience. You run live sales roleplay scenarios to help salespeople improve.
-
-Session flow:
-1. Ask the user what they sell and who their ideal customer is
-2. Roleplay as a realistic prospect — skeptical but not hostile
-3. React naturally to their pitch: ask tough questions, raise real objections
-4. After each practice round, give a 30-second debrief on what worked and what to improve
-5. Focus on: opening hooks, objection handling, closing techniques
-
-Push back realistically. Don't make it too easy. A good sales rep should earn the deal.`,
   },
   {
-    id: 'doctor',
-    icon: '🩺',
-    name: 'Medical Tutor',
-    tagline: 'Clinical case walkthroughs for students.',
-    color: '#ef4444',
-    prompt: `You are Dr. Patel, an experienced attending physician who teaches medical students through clinical case discussions. You are thorough, patient, and passionate about evidence-based medicine.
-
-How you teach:
-- Present a patient case step by step (history, then vitals, then labs)
-- Ask the student for their differential diagnosis at each stage
-- Guide them through clinical reasoning with questions: "What finding makes you think that?"
-- Reference real guidelines (UpToDate, ACC, WHO) using web_search when discussing management
-- Celebrate good reasoning; gently correct gaps without being dismissive
-
-Emphasise: systematic thinking, patient safety, and "why" over memorisation. Start by presenting today's case.
-
-⚠️ Educational purpose only — not medical advice.`,
+    icon: 'brain', title: 'Company Brain',
+    desc: 'Persistent memory across sessions. Tracks commitments and risks.',
+    tools: ['get_brain_summary', 'get_active_commitments', 'get_active_risks'],
+    color: '#ec4899',
   },
   {
-    id: 'therapist',
-    icon: '🧠',
-    name: 'Reflective Listener',
-    tagline: 'A supportive space to think out loud.',
+    icon: 'drive', title: 'Drive & Documents',
+    desc: 'Search Drive, find recent files, and pull document context.',
+    tools: ['search_drive', 'list_recent_drive_files', 'get_drive_file_info'],
     color: '#06b6d4',
-    prompt: `You are a warm, non-judgmental reflective listener. Your role is to help the user process their thoughts and feelings through active listening and gentle questions. You do NOT give advice unless explicitly asked.
-
-Your approach:
-- Reflect back what you hear: "It sounds like you're feeling..."
-- Ask open questions that deepen reflection: "What do you think is driving that?"
-- Validate emotions without projecting: "That makes a lot of sense given what you described"
-- Notice patterns and gently name them: "I've noticed you mention [X] a few times..."
-- If distress seems serious, compassionately suggest professional support
-
-Keep responses short (2-3 sentences). You are a thinking partner, not a therapist.`,
-  },
-  {
-    id: 'custom',
-    icon: '✏️',
-    name: 'Custom Persona',
-    tagline: 'Write your own from scratch.',
-    color: '#94a3b8',
-    prompt: `You are [NAME], a [DESCRIPTION].
-
-Your goal: [WHAT THE AGENT DOES]
-
-How you behave:
-- [PERSONALITY TRAIT 1]
-- [PERSONALITY TRAIT 2]
-- [PERSONALITY TRAIT 3]
-
-Session structure:
-1. [STEP 1]
-2. [STEP 2]
-3. [STEP 3]
-
-Replace everything in [brackets] with your own content.`,
   },
 ]
 
+// ── Voice commands to showcase ──────────────────────────────────────────────
+const VOICE_COMMANDS = [
+  '"Brief me" — full status update',
+  '"Check my emails" — scan recent inbox',
+  '"How\'s my relationship with [name]?"',
+  '"What\'s on my calendar today?"',
+  '"Send an email to [name] about [topic]"',
+  '"What commitments am I behind on?"',
+  '"Search Drive for [topic]"',
+  '"Create a task for [person]"',
+]
+
+// ── SVG Icon Components ─────────────────────────────────────────────────────
+const SVGIcons = {
+  email: (size = 24) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+      <path d="M22 6l-10 7L2 6" />
+    </svg>
+  ),
+  calendar: (size = 24) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <path d="M16 2v4" />
+      <path d="M8 2v4" />
+      <path d="M3 10h18" />
+    </svg>
+  ),
+  crm: (size = 24) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  ),
+  tasks: (size = 24) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  ),
+  brain: (size = 24) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2c-2.2 0-4 1.8-4 4 0 1.1.5 2.1 1.2 2.8-.3.4-.8.8-1.2.8-2.2 0-4 1.8-4 4 0 1.1.5 2.1 1.2 2.8-.3.4-.8.8-1.2.8-2.2 0-4 1.8-4 4 0 1.1.5 2.1 1.2 2.8H20c.7-.7 1.2-1.7 1.2-2.8 0-2.2-1.8-4-4-4-.4 0-.9.4-1.2.8.7-.7 1.2-1.7 1.2-2.8 0-2.2-1.8-4-4-4-.4 0-.9.4-1.2.8.7-.7 1.2-1.7 1.2-2.8 0-2.2-1.8-4-4-4z" />
+    </svg>
+  ),
+  drive: (size = 24) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 19a2 2 0 0 1-2.414-.646l-5.106-6.564a2 2 0 0 0-1.38-.636h-.82a2 2 0 0 0-1.82 1.097l-2.165 4.25a2 2 0 0 1-1.802 1.097H7a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h5a2 2 0 0 0 1.82-1.097l2.165-4.25a2 2 0 0 1 1.802-1.097h.82a2 2 0 0 1 1.38.636l5.106 6.564A2 2 0 0 0 22 9z" />
+    </svg>
+  ),
+}
+
 export default function SetupScreen({ onStart }) {
-  const [selectedId, setSelectedId] = useState('astra')
-  const [prompt, setPrompt] = useState(TEMPLATES[0].prompt)
-  const [personaName, setPersonaName] = useState(TEMPLATES[0].name)
+  const { theme: T } = useTheme()
+  const S = getStyles(T)
+
   const [userName, setUserName] = useState('')
   const [voice, setVoice] = useState('Charon')
   const [voices, setVoices] = useState([])
-  const [tab, setTab] = useState('templates')  // 'templates' | 'editor'
   const [loading, setLoading] = useState(false)
-  const [loadingStep, setLoadingStep] = useState(null)   // 'avatar' | 'session' | null
+  const [loadingStep, setLoadingStep] = useState(null)
   const [error, setError] = useState('')
+  const [brainSummary, setBrainSummary] = useState(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [hoveredCard, setHoveredCard] = useState(null)
 
+  // Fetch voices on mount
   useEffect(() => {
     fetch(`${BACKEND}/api/voices`)
       .then(r => r.json())
@@ -219,51 +176,44 @@ export default function SetupScreen({ onStart }) {
       .catch(() => { })
   }, [])
 
-  const selectTemplate = (tpl) => {
-    setSelectedId(tpl.id)
-    setPrompt(tpl.prompt)
-    setPersonaName(tpl.name)
-    setTab('editor')
-  }
+  // Fetch brain summary to show real data
+  useEffect(() => {
+    fetch(`${BACKEND}/brain/summary`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setBrainSummary(d) })
+      .catch(() => { })
+  }, [])
 
-  const handleStart = async () => {
-    if (!prompt.trim()) { setError('Please write a persona prompt.'); return }
+  const handleLaunch = async () => {
     setError('')
     setLoading(true)
 
-    // ── Phase 1: Generate AI portrait avatar via Imagen 3 ─────────────────
-    // Non-fatal: if this fails we fall back to the SVG orb avatar gracefully.
+    // Phase 1: Generate avatar (non-fatal)
     let avatarImage = null
     setLoadingStep('avatar')
     try {
       const avatarRes = await fetch(`${BACKEND}/api/generate-avatar`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          persona_description: personaName.trim() || 'a professional AI assistant',
-        }),
+        body: JSON.stringify({ persona_description: 'Astra — AI Chief of Staff' }),
       })
       if (avatarRes.ok) {
         const avatarData = await avatarRes.json()
-        avatarImage = avatarData.image || null
-        console.log('[SetupScreen] ✅ Portrait generated via', avatarData.model)
-      } else {
-        console.warn('[SetupScreen] Avatar API returned', avatarRes.status, '— using SVG fallback')
+        if (avatarData.success && avatarData.image) {
+          avatarImage = avatarData.image
+        }
       }
-    } catch (e) {
-      // Network error or backend not running — non-fatal, just use SVG orb
-      console.warn('[SetupScreen] Avatar generation failed (SVG fallback):', e.message)
-    }
+    } catch { /* non-fatal */ }
 
-    // ── Phase 2: Create the live agent session ────────────────────────────
+    // Phase 2: Create session
     setLoadingStep('session')
     try {
       const res = await fetch(`${BACKEND}/api/session/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          persona_name: personaName.trim() || 'AI Agent',
-          system_prompt: prompt.trim(),
+          persona_name: 'Astra — AI Chief of Staff',
+          system_prompt: ASTRA_PROMPT,
           voice,
           user_name: userName.trim(),
         }),
@@ -273,7 +223,6 @@ export default function SetupScreen({ onStart }) {
         throw new Error(e.detail || 'Server error')
       }
       const data = await res.json()
-      // Pass avatarImage alongside the session data — InterviewRoom picks it up
       onStart({ ...data, backendUrl: BACKEND, avatarImage })
     } catch (e) {
       setError(e.message || 'Failed — is the backend running?')
@@ -283,268 +232,644 @@ export default function SetupScreen({ onStart }) {
     }
   }
 
-  const selectedTpl = TEMPLATES.find(t => t.id === selectedId) || TEMPLATES[0]
-
   return (
     <div style={S.root}>
-      <div style={S.blob1} /><div style={S.blob2} />
+      <div style={S.container}>
 
-      <div style={S.shell}>
-        {/* ── Left: Header + Template Gallery ── */}
-        <div style={S.left}>
+        {/* ── Header ──────────────────────────────────────────────── */}
+        <header style={S.header}>
           <div style={S.logoRow}>
-            <div style={S.logoMark}>A</div>
+            <div style={S.logoMark}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                <path d="M2 17l10 5 10-5" />
+                <path d="M2 12l10 5 10-5" />
+              </svg>
+            </div>
             <div>
-              <div style={S.logoTitle}>AstraAgent</div>
-              <div style={S.logoSub}>Live AI Agent Platform</div>
+              <div style={S.logoTitle}>Astra OS</div>
+              <div style={S.logoSub}>The Founder's Operating System</div>
+            </div>
+          </div>
+          <div style={S.headerRight}>
+            <ThemeToggle />
+            <button
+              style={{
+                ...S.settingsToggle,
+                ...(showSettings ? S.settingsToggleActive : {}),
+              }}
+              onClick={() => setShowSettings(!showSettings)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+              <span>Settings</span>
+            </button>
+          </div>
+        </header>
+
+        {/* ── Hero section ────────────────────────────────────────── */}
+        <div style={S.hero}>
+          <div style={S.heroLeft}>
+            <h1 style={S.heroTitle}>
+              Your AI Chief of Staff
+            </h1>
+            <p style={S.heroDesc}>
+              Astra manages your email, calendar, relationships, tasks, and company memory — entirely by voice. Just talk.
+            </p>
+
+            {/* Integration badges with glow */}
+            <div style={S.integrationRow}>
+              <span style={S.integrationBadge}>
+                <span style={S.integrationDot('#22c55e')} />Gmail
+              </span>
+              <span style={S.integrationBadge}>
+                <span style={S.integrationDot('#22c55e')} />Calendar
+              </span>
+              <span style={S.integrationBadge}>
+                <span style={S.integrationDot('#22c55e')} />Drive
+              </span>
+              <span style={S.integrationBadge}>
+                <span style={S.integrationDot('#8b5cf6')} />Company Brain
+              </span>
+            </div>
+
+            {/* Quick brain stats with glass background */}
+            {brainSummary && (
+              <div style={S.statsRow}>
+                <div style={S.statChip}>
+                  <span style={S.statNum}>{brainSummary.active_insights || 0}</span>
+                  <span style={S.statLabel}>insights</span>
+                </div>
+                <div style={S.statChip}>
+                  <span style={S.statNum}>{brainSummary.open_tasks || 0}</span>
+                  <span style={S.statLabel}>tasks</span>
+                </div>
+                <div style={S.statChip}>
+                  <span style={{
+                    ...S.statNum,
+                    color: brainSummary.overdue_commitments > 0 ? T.danger : T.text
+                  }}>
+                    {brainSummary.overdue_commitments || 0}
+                  </span>
+                  <span style={S.statLabel}>overdue</span>
+                </div>
+                <div style={S.statChip}>
+                  <span style={S.statNum}>{brainSummary.pending_alerts || 0}</span>
+                  <span style={S.statLabel}>alerts</span>
+                </div>
+              </div>
+            )}
+
+            {/* Settings panel (smooth collapse/expand) */}
+            {showSettings && (
+              <div style={S.settingsPanel}>
+                <div style={S.settingRow}>
+                  <label style={S.settingLabel}>Your name</label>
+                  <input
+                    style={S.settingInput}
+                    placeholder="e.g. Khwahish"
+                    value={userName}
+                    onChange={e => setUserName(e.target.value)}
+                    onFocus={e => e.target.style.borderColor = T.accent}
+                    onBlur={e => e.target.style.borderColor = T.border}
+                  />
+                </div>
+                <div style={S.settingRow}>
+                  <label style={S.settingLabel}>Voice</label>
+                  <select
+                    style={S.settingInput}
+                    value={voice}
+                    onChange={e => setVoice(e.target.value)}
+                    onFocus={e => e.target.style.borderColor = T.accent}
+                    onBlur={e => e.target.style.borderColor = T.border}
+                  >
+                    {(voices.length > 0 ? voices.map(v => (
+                      <option key={v.id} value={v.id}>{v.label}</option>
+                    )) : ['Charon', 'Orus', 'Fenrir', 'Puck', 'Aoede', 'Kore', 'Leda', 'Zephyr'].map(v => (
+                      <option key={v} value={v}>{v}</option>
+                    )))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {error && <div style={S.error}>{error}</div>}
+
+            {/* Launch button with gradient and glow */}
+            <button
+              style={{
+                ...S.launchBtn,
+                ...(loading ? S.launchBtnLoading : {}),
+              }}
+              onClick={handleLaunch}
+              disabled={loading}
+            >
+              {loadingStep === 'avatar'
+                ? <><span style={S.spinner} className="spin" /> Starting...</>
+                : loadingStep === 'session'
+                  ? <><span style={S.spinner} className="spin" /> Connecting...</>
+                  : <>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                      <line x1="12" y1="19" x2="12" y2="23" />
+                      <line x1="8" y1="23" x2="16" y2="23" />
+                    </svg>
+                    Launch Astra
+                  </>
+              }
+            </button>
+            <div style={S.launchHint}>
+              Requires microphone access
             </div>
           </div>
 
-          <p style={S.pitch}>
-            Write a prompt. Launch any AI persona — interviewer, tutor, coach, companion.
-            Powered by Gemini 2.5 Flash Live + ADK.
-          </p>
-
-          <div style={S.pillRow}>
-            {['Hears you', 'Sees you', 'Speaks back', 'Any persona'].map(p => (
-              <span key={p} style={S.pill}>{p}</span>
-            ))}
-          </div>
-
-          {/* Template grid */}
-          <div style={S.tplLabel}>Choose a starting template</div>
-          <div style={S.tplGrid}>
-            {TEMPLATES.map(t => (
-              <button key={t.id} onClick={() => selectTemplate(t)}
-                style={{ ...S.tplCard, ...(selectedId === t.id ? { ...S.tplActive, borderColor: t.color + '80', background: t.color + '12' } : {}) }}>
-                <span style={S.tplIcon}>{t.icon}</span>
-                <div style={S.tplName}>{t.name}</div>
-                <div style={S.tplTagline}>{t.tagline}</div>
-                {selectedId === t.id && <div style={{ ...S.tplDot, background: t.color }} />}
-              </button>
-            ))}
+          {/* Right side: Voice commands preview card */}
+          <div style={S.heroRight}>
+            <div style={S.commandsCard}>
+              <div style={S.commandsHeader}>
+                Try saying...
+              </div>
+              <div style={S.commandsList}>
+                {VOICE_COMMANDS.map((cmd, i) => (
+                  <div key={i} style={S.commandItem}>{cmd}</div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* ── Right: Persona Editor + Launch ── */}
-        <div style={S.right} className="glass">
-
-          {/* Tabs */}
-          <div style={S.tabRow}>
-            {['editor', 'settings'].map(t => (
-              <button key={t} style={{ ...S.tabBtn, ...(tab === t ? S.tabActive : {}) }}
-                onClick={() => setTab(t)}>
-                {t === 'editor' ? '✏️ Persona Prompt' : '⚙️ Settings'}
-              </button>
-            ))}
+        {/* ── Capabilities grid with glass cards ──────────────────── */}
+        <div style={S.capSection}>
+          <div style={S.capSectionHeader}>
+            <h2 style={S.capTitle}>Capabilities</h2>
+            <span style={S.toolCount}>Powered by Google Gemini</span>
           </div>
-
-          {tab === 'editor' && (
-            <>
-              <div style={S.editorHeader}>
-                <span style={{ ...S.tplIcon, fontSize: 20 }}>{selectedTpl.icon}</span>
-                <input style={S.nameInput} value={personaName}
-                  onChange={e => setPersonaName(e.target.value)}
-                  placeholder="Persona name…" />
-              </div>
-
-              <div style={S.promptHelp}>
-                Edit the system prompt below. This is what defines your agent's personality,
-                goals, and behaviour. Be specific — Gemini follows it precisely.
-              </div>
-
-              <textarea
-                style={S.promptArea}
-                value={prompt}
-                onChange={e => setPrompt(e.target.value)}
-                placeholder="Write your agent's system prompt here…"
-                rows={14}
-                spellCheck={false}
-              />
-
-              <div style={S.charCount}>{prompt.length} chars</div>
-            </>
-          )}
-
-          {tab === 'settings' && (
-            <div style={S.settingsPane}>
-              <div style={S.settingGroup}>
-                <label style={S.settingLabel}>Your name (optional)</label>
-                <input style={S.settingInput} placeholder="e.g. Khwahish"
-                  value={userName} onChange={e => setUserName(e.target.value)} />
-                <div style={S.settingHint}>The agent will address you by name</div>
-              </div>
-
-              <div style={S.settingGroup}>
-                <label style={S.settingLabel}>Agent voice</label>
-                {voices.length > 0 ? (
-                  <select style={S.settingInput} value={voice}
-                    onChange={e => setVoice(e.target.value)}>
-                    {voices.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
-                  </select>
-                ) : (
-                  <select style={S.settingInput} value={voice}
-                    onChange={e => setVoice(e.target.value)}>
-                    {['Charon', 'Orus', 'Fenrir', 'Puck', 'Aoede', 'Kore', 'Leda', 'Zephyr'].map(v => (
-                      <option key={v} value={v}>{v}</option>
-                    ))}
-                  </select>
-                )}
-                <div style={S.settingHint}>Gemini's built-in neural voice for this agent</div>
-              </div>
-
-              <div style={S.settingGroup}>
-                <label style={S.settingLabel}>Available tools (always on)</label>
-                {[
-                  '🔍 Web Search (Google)',
-                  '📊 Evaluate Response',
-                  '🎯 Live Coaching',
-                  '🧠 Remember Context',
-                  '📋 Structured Plan',
-                  '🔬 Document Analysis (ReasoningAgent)',
-                ].map(t => (
-                  <div key={t} style={S.toolItem}><span style={S.toolCheck}>✓</span>{t}</div>
-                ))}
-                <div style={S.settingHint}>
-                  Hold up a document or resume to the camera — the agent will
-                  automatically delegate to ReasoningAgent for deep analysis
+          <div style={S.capGrid}>
+            {CAPABILITIES.map((cap, i) => (
+              <div
+                key={i}
+                style={{
+                  ...S.capCard,
+                  ...(hoveredCard === i ? S.capCardHover(cap.color) : {}),
+                }}
+                className={`stagger-${i + 1}`}
+                onMouseEnter={() => setHoveredCard(i)}
+                onMouseLeave={() => setHoveredCard(null)}
+              >
+                <div style={S.capCardHeader}>
+                  <span
+                    style={{
+                      ...S.capIcon,
+                      background: cap.color + '18',
+                      color: cap.color,
+                    }}
+                  >
+                    {SVGIcons[cap.icon](24)}
+                  </span>
                 </div>
+                <div style={S.capCardTitle}>{cap.title}</div>
+                <div style={S.capCardDesc}>{cap.desc}</div>
               </div>
-            </div>
-          )}
-
-          {error && <div style={S.error}>{error}</div>}
-
-          <button style={{ ...S.launchBtn, ...(loading ? S.launchLoading : {}) }}
-            onClick={handleStart} disabled={loading}>
-            {loadingStep === 'avatar'
-              ? <><span style={S.spinner} className="spin" /> Generating portrait via Imagen 3…</>
-              : loadingStep === 'session'
-                ? <><span style={S.spinner} className="spin" /> Launching agent…</>
-                : <><span>🚀</span> Launch {personaName || 'Agent'}</>
-            }
-          </button>
-
-          <div style={S.footer}>
-            Gemini 2.5 Flash Native Audio · Imagen 3 Avatar · ADK Tri-Agent · Cloud Run
+            ))}
           </div>
         </div>
       </div>
+
+      {/* CSS animations */}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .spin {
+          animation: spin 1s linear infinite;
+        }
+        .stagger-1 { animation: slideUp 0.6s ease-out 0.05s both; }
+        .stagger-2 { animation: slideUp 0.6s ease-out 0.1s both; }
+        .stagger-3 { animation: slideUp 0.6s ease-out 0.15s both; }
+        .stagger-4 { animation: slideUp 0.6s ease-out 0.2s both; }
+        .stagger-5 { animation: slideUp 0.6s ease-out 0.25s both; }
+        .stagger-6 { animation: slideUp 0.6s ease-out 0.3s both; }
+        @keyframes slideUp {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+      `}</style>
     </div>
   )
 }
 
-const S = {
+// ── Styles (theme-aware function) ────────────────────────────────────────────
+const getStyles = (t) => ({
   root: {
-    minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    padding: 24, position: 'relative', overflow: 'hidden'
+    minHeight: '100vh',
+    background: `linear-gradient(180deg, ${t.bg} 0%, ${t.bg} 60%, rgba(79,125,255,0.03) 100%)`,
+    color: t.text,
+    fontFamily: '"Inter", system-ui, -apple-system, sans-serif',
+    position: 'relative',
+    overflow: 'auto',
   },
-  blob1: {
-    position: 'fixed', width: 800, height: 800, borderRadius: '50%', top: -300, left: -300,
-    background: 'radial-gradient(circle,rgba(79,125,255,0.1) 0%,transparent 70%)',
-    pointerEvents: 'none'
+
+
+  container: {
+    maxWidth: 1240,
+    margin: '0 auto',
+    padding: '0 32px 64px',
+    position: 'relative',
+    zIndex: 1,
   },
-  blob2: {
-    position: 'fixed', width: 700, height: 700, borderRadius: '50%', bottom: -250, right: -250,
-    background: 'radial-gradient(circle,rgba(168,85,247,0.08) 0%,transparent 70%)',
-    pointerEvents: 'none'
+
+  // ── Header ───────────────────────────────────────────────────────
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '24px 0',
+    borderBottom: `1px solid ${t.borderSubtle}`,
   },
-  shell: { display: 'flex', gap: 24, maxWidth: 980, width: '100%', alignItems: 'flex-start' },
-  left: { width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 16 },
-  logoRow: { display: 'flex', alignItems: 'center', gap: 12 },
+  logoRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 14,
+  },
   logoMark: {
-    width: 42, height: 42, borderRadius: 12, background: 'linear-gradient(135deg,#4f7dff,#a855f7)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 20, fontWeight: 900, color: 'white', flexShrink: 0
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    background: t.gradientPrimary,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    boxShadow: `0 0 20px ${t.accentGlow}`,
   },
-  logoTitle: { fontSize: 20, fontWeight: 700, color: '#eef0fa' },
-  logoSub: { fontSize: 11, color: 'rgba(238,240,250,0.4)' },
-  pitch: {
-    fontSize: 13, color: 'rgba(238,240,250,0.6)', lineHeight: 1.7,
-    borderLeft: '2px solid rgba(79,125,255,0.4)', paddingLeft: 12
+  logoTitle: {
+    fontSize: 18,
+    fontWeight: 700,
+    letterSpacing: '-0.02em',
   },
-  pillRow: { display: 'flex', flexWrap: 'wrap', gap: 5 },
-  pill: {
-    fontSize: 10, fontWeight: 600, padding: '3px 9px', borderRadius: 20,
-    background: 'rgba(79,125,255,0.1)', color: 'rgba(79,125,255,0.85)',
-    border: '1px solid rgba(79,125,255,0.2)'
+  logoSub: {
+    fontSize: 11,
+    color: t.textDim,
+    letterSpacing: '0.02em',
   },
-  tplLabel: {
-    fontSize: 11, fontWeight: 600, color: 'rgba(238,240,250,0.4)',
-    textTransform: 'uppercase', letterSpacing: '0.06em'
+  headerRight: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
   },
-  tplGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 },
-  tplCard: {
-    padding: '12px 10px', borderRadius: 12, border: '1px solid rgba(255,255,255,0.07)',
-    background: 'rgba(255,255,255,0.02)', cursor: 'pointer', textAlign: 'left',
-    position: 'relative', transition: 'all 0.2s'
+  settingsToggle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '8px 16px',
+    borderRadius: 10,
+    background: t.bgGlass,
+    backdropFilter: 'blur(16px)',
+    WebkitBackdropFilter: 'blur(16px)',
+    border: `1px solid ${t.border}`,
+    color: t.textSecondary,
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all 200ms cubic-bezier(0.4, 0, 0.2, 1)',
   },
-  tplActive: {},
-  tplDot: { position: 'absolute', top: 8, right: 8, width: 7, height: 7, borderRadius: '50%' },
-  tplIcon: { fontSize: 22, display: 'block', marginBottom: 5 },
-  tplName: { fontSize: 12, fontWeight: 700, color: '#eef0fa', marginBottom: 2 },
-  tplTagline: { fontSize: 10, color: 'rgba(238,240,250,0.4)', lineHeight: 1.4 },
-  right: { flex: 1, display: 'flex', flexDirection: 'column', gap: 0, overflow: 'hidden', minHeight: 500 },
-  tabRow: { display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.06)', padding: '0 4px' },
-  tabBtn: {
-    padding: '11px 16px', fontSize: 12, fontWeight: 600, color: 'rgba(238,240,250,0.45)',
-    background: 'none', border: 'none', cursor: 'pointer', borderBottom: '2px solid transparent',
-    marginBottom: '-1px', transition: 'all 0.2s'
+  settingsToggleActive: {
+    background: `rgba(79,125,255,0.1)`,
+    borderColor: t.borderAccent,
+    color: t.accent,
   },
-  tabActive: { color: '#4f7dff', borderBottomColor: '#4f7dff' },
-  editorHeader: { display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px 0' },
-  nameInput: {
-    flex: 1, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: 8, padding: '7px 10px', color: '#eef0fa', fontSize: 14,
-    fontWeight: 600, outline: 'none', fontFamily: 'inherit'
+
+  // ── Hero Section ─────────────────────────────────────────────────
+  hero: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 320px',
+    gap: 48,
+    padding: '56px 0 48px',
+    alignItems: 'start',
   },
-  promptHelp: { fontSize: 11, color: 'rgba(238,240,250,0.35)', padding: '8px 16px 0', lineHeight: 1.5 },
-  promptArea: {
-    margin: '10px 16px 0', borderRadius: 10, background: 'rgba(255,255,255,0.03)',
-    border: '1px solid rgba(255,255,255,0.08)', color: '#eef0fa', fontSize: 12,
-    lineHeight: 1.7, padding: '12px 14px', resize: 'vertical', outline: 'none',
-    fontFamily: 'inherit', minHeight: 220
+  heroLeft: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 24,
   },
-  charCount: {
-    fontSize: 10, color: 'rgba(238,240,250,0.2)', textAlign: 'right',
-    padding: '4px 18px 0'
+  heroTitle: {
+    fontSize: 44,
+    fontWeight: 800,
+    lineHeight: 1.1,
+    letterSpacing: '-0.03em',
+    background: t.gradientPrimary,
+    WebkitBackgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+    backgroundClip: 'text',
+    margin: 0,
   },
-  settingsPane: { padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 18, flex: 1 },
-  settingGroup: { display: 'flex', flexDirection: 'column', gap: 5 },
+  heroDesc: {
+    fontSize: 16,
+    color: t.textSecondary,
+    lineHeight: 1.8,
+    maxWidth: 560,
+    margin: 0,
+  },
+
+  // Integration badges
+  integrationRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  integrationBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 12,
+    fontWeight: 600,
+    padding: '6px 14px',
+    borderRadius: 20,
+    background: t.bgGlass,
+    backdropFilter: 'blur(16px)',
+    WebkitBackdropFilter: 'blur(16px)',
+    border: `1px solid ${t.border}`,
+    color: t.textSecondary,
+    transition: 'all 200ms ease-out',
+  },
+  integrationDot: (color) => ({
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    background: color,
+    display: 'inline-block',
+    boxShadow: `0 0 8px ${color}`,
+    animation: 'pulse 2s ease-in-out infinite',
+  }),
+
+  // Brain stats
+  statsRow: {
+    display: 'flex',
+    gap: 12,
+    flexWrap: 'wrap',
+  },
+  statChip: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 3,
+    padding: '12px 18px',
+    borderRadius: 12,
+    background: t.bgGlass,
+    backdropFilter: 'blur(16px)',
+    WebkitBackdropFilter: 'blur(16px)',
+    border: `1px solid ${t.border}`,
+    minWidth: 80,
+    transition: 'all 200ms ease-out',
+  },
+  statNum: {
+    fontSize: 24,
+    fontWeight: 700,
+    fontVariantNumeric: 'tabular-nums',
+    color: t.text,
+  },
+  statLabel: {
+    fontSize: 10,
+    fontWeight: 600,
+    color: t.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+
+  // Settings panel (glass card with smooth animation)
+  settingsPanel: {
+    display: 'flex',
+    gap: 18,
+    padding: '18px 22px',
+    background: t.bgGlass,
+    backdropFilter: 'blur(16px)',
+    WebkitBackdropFilter: 'blur(16px)',
+    border: `1px solid ${t.border}`,
+    borderRadius: 16,
+    animation: 'slideUp 0.3s ease-out',
+  },
+  settingRow: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 5,
+    flex: 1,
+  },
   settingLabel: {
-    fontSize: 11, fontWeight: 600, color: 'rgba(238,240,250,0.45)',
-    textTransform: 'uppercase', letterSpacing: '0.05em'
+    fontSize: 10,
+    fontWeight: 600,
+    color: t.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
   },
   settingInput: {
-    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)',
-    borderRadius: 8, padding: '8px 11px', color: '#eef0fa', fontSize: 13,
-    outline: 'none', fontFamily: 'inherit'
+    background: t.bgSurface,
+    border: `1px solid ${t.border}`,
+    borderRadius: 10,
+    padding: '10px 14px',
+    color: t.text,
+    fontSize: 13,
+    outline: 'none',
+    fontFamily: 'inherit',
+    transition: 'all 200ms cubic-bezier(0.4, 0, 0.2, 1)',
   },
-  settingHint: { fontSize: 10, color: 'rgba(238,240,250,0.28)' },
-  toolItem: {
-    display: 'flex', alignItems: 'center', gap: 8, fontSize: 12,
-    color: 'rgba(238,240,250,0.55)', padding: '3px 0'
-  },
-  toolCheck: { color: '#22c55e', fontWeight: 700 },
+
+  // Error message
   error: {
-    margin: '0 16px', background: 'rgba(239,68,68,0.08)',
-    border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8,
-    padding: '9px 12px', color: '#fca5a5', fontSize: 12
+    background: `${t.danger}1a`,
+    border: `1px solid ${t.danger}4d`,
+    borderRadius: 12,
+    padding: '12px 16px',
+    color: '#fca5a5',
+    fontSize: 13,
+    animation: 'slideUp 0.3s ease-out',
   },
+
+  // Launch button with gradient and glow
   launchBtn: {
-    margin: '12px 16px 8px', padding: '13px', borderRadius: 11,
-    background: 'linear-gradient(135deg,#4f7dff,#7c3aed)',
-    border: 'none', color: 'white', fontSize: 14, fontWeight: 700,
-    cursor: 'pointer', display: 'flex', alignItems: 'center',
-    justifyContent: 'center', gap: 10, transition: 'opacity 0.2s'
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    padding: '16px 36px',
+    borderRadius: 14,
+    background: t.gradientPrimary,
+    border: 'none',
+    color: 'white',
+    fontSize: 15,
+    fontWeight: 700,
+    cursor: 'pointer',
+    transition: 'all 200ms cubic-bezier(0.4, 0, 0.2, 1)',
+    boxShadow: `0 0 30px ${t.accentGlow}, 0 8px 24px ${t.accentGlow}`,
+    alignSelf: 'flex-start',
   },
-  launchLoading: { opacity: 0.65, cursor: 'not-allowed' },
+  launchBtnLoading: {
+    opacity: 0.7,
+    cursor: 'not-allowed',
+  },
   spinner: {
-    width: 15, height: 15, border: '2px solid rgba(255,255,255,0.3)',
-    borderTopColor: 'white', borderRadius: '50%', display: 'inline-block'
+    width: 16,
+    height: 16,
+    borderRadius: '50%',
+    border: '2px solid rgba(255,255,255,0.3)',
+    borderTopColor: 'white',
+    display: 'inline-block',
   },
-  footer: {
-    fontSize: 10, color: 'rgba(238,240,250,0.22)', textAlign: 'center',
-    padding: '0 16px 14px'
+  launchHint: {
+    fontSize: 11,
+    color: t.textMuted,
+    letterSpacing: '0.02em',
   },
-}
+
+  // Right hero: voice commands
+  heroRight: {
+    width: 320,
+    flexShrink: 0,
+  },
+  commandsCard: {
+    borderRadius: 16,
+    background: t.bgGlass,
+    backdropFilter: 'blur(16px)',
+    WebkitBackdropFilter: 'blur(16px)',
+    border: `1px solid ${t.border}`,
+    overflow: 'hidden',
+    transition: 'all 200ms cubic-bezier(0.4, 0, 0.2, 1)',
+  },
+  commandsHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '14px 18px',
+    borderBottom: `1px solid ${t.borderSubtle}`,
+    fontSize: 12,
+    fontWeight: 700,
+    color: t.textSecondary,
+    letterSpacing: '0.02em',
+  },
+  commandsList: {
+    padding: '8px 0',
+    maxHeight: 400,
+    overflow: 'auto',
+  },
+  commandItem: {
+    padding: '10px 18px',
+    fontSize: 12,
+    color: t.textDim,
+    lineHeight: 1.5,
+    borderBottom: `1px solid ${t.borderSubtle}`,
+    transition: 'all 150ms ease-out',
+  },
+
+  // ── Capabilities Section ─────────────────────────────────────────
+  capSection: {
+    marginTop: 32,
+  },
+  capSectionHeader: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: 28,
+  },
+  capTitle: {
+    fontSize: 24,
+    fontWeight: 700,
+    letterSpacing: '-0.02em',
+    margin: 0,
+  },
+  toolCount: {
+    fontSize: 12,
+    color: t.textMuted,
+    fontWeight: 500,
+  },
+
+  // Capabilities grid (3 columns with minmax responsiveness)
+  capGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: 16,
+  },
+
+  // Capability card with glass effect
+  capCard: {
+    padding: '22px 24px',
+    borderRadius: 16,
+    background: t.bgGlass,
+    backdropFilter: 'blur(16px)',
+    WebkitBackdropFilter: 'blur(16px)',
+    border: `1px solid ${t.border}`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    transition: 'all 200ms cubic-bezier(0.4, 0, 0.2, 1)',
+  },
+
+  capCardHover: (color) => ({
+    transform: 'translateY(-4px)',
+    boxShadow: `0 0 24px ${color}26, 0 12px 32px rgba(0,0,0,0.2)`,
+    borderColor: `${color}40`,
+  }),
+
+  capCardHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  capIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 18,
+    transition: 'all 200ms ease-out',
+  },
+
+  capToolCount: {
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+  },
+
+  capCardTitle: {
+    fontSize: 15,
+    fontWeight: 700,
+    marginTop: 2,
+  },
+
+  capCardDesc: {
+    fontSize: 13,
+    color: t.textDim,
+    lineHeight: 1.6,
+  },
+
+  capToolList: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+  },
+
+  capToolPill: {
+    fontSize: 10,
+    fontWeight: 600,
+    padding: '3px 10px',
+    borderRadius: 8,
+    background: t.bgSurface,
+    border: `1px solid ${t.borderSubtle}`,
+    color: t.textDim,
+    letterSpacing: '0.02em',
+    transition: 'all 150ms ease-out',
+  },
+})

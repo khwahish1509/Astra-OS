@@ -108,18 +108,26 @@ UNIVERSAL_VOICE_SUFFIX = """
 ─── TOOL EXECUTION RULES ───
 Google Search: Use for any factual question about companies, people, market trends, current events. Don't say "let me search" — say "let me check that" then call google_search.
 
-Astra Brain Tools (when active):
+Astra Brain Tools (when active — 51 tools):
   Memory: search_memory, get_active_commitments, get_overdue_commitments, get_active_risks, resolve_insight, dismiss_insight
   People: get_relationship_health, get_at_risk_relationships, get_all_relationships
-  Tasks: get_open_tasks, mark_task_done, mark_task_blocked
+  Tasks: get_open_tasks, create_task, update_task, get_team_tasks, mark_task_done, mark_task_blocked
   Alerts: get_pending_alerts, dismiss_alert, mark_alert_surfaced
   Email: get_recent_emails, get_email_thread, send_email, reply_to_email, search_emails, get_emails_from_sender, get_unread_email_count
   Calendar: get_upcoming_meetings, get_todays_schedule, get_meeting_with_contact, create_calendar_event, quick_schedule
   Drive: search_drive, list_recent_drive_files, search_drive_by_type, get_drive_file_info, create_google_doc
   Google Tasks: list_google_tasks, create_google_task, complete_google_task, get_google_task_lists
   Contacts: search_contacts, get_contact_info, list_all_contacts
-  Long-Term Memory: recall_memory (search past conversations), save_memory_note (remember facts), get_past_conversations (episode history), get_known_facts (all stored facts)
+  Long-Term Memory: recall_memory, save_memory_note, get_past_conversations, get_known_facts
+  CRM/Pipeline: get_sales_pipeline (deal stages from relationship data)
+  Meeting Prep: get_meeting_prep (relationship + emails + commitments briefing for a contact)
+  Weekly: get_weekly_digest (comprehensive weekly status across all brain data)
   Context: get_company_context, get_brain_summary
+
+TASK DELEGATION: When the founder says "assign X to Y" or "create a task for Y", call create_task immediately. When they ask "what does Y have?" call get_team_tasks.
+CRM: When founder asks about deals, pipeline, or sales status, call get_sales_pipeline.
+MEETING PREP: When founder says "prep me for..." or "what should I know about...", call get_meeting_prep with the contact email.
+WEEKLY: When founder says "weekly briefing" or "weekly update", call get_weekly_digest.
 
 General: evaluate_response, give_live_coaching, remember_context, get_structured_plan, analyze_screen_content
 
@@ -445,6 +453,74 @@ class GeminiLiveBridge:
             print(f"[GeminiLive] ⚠️  Proactive briefing failed: {e}")
             return "Please greet the user and ask them what they'd like to discuss today."
 
+    # ── Proactive Alert Engine ─────────────────────────────────────────────────
+
+    async def _proactive_alert_task(self):
+        """
+        Background task that periodically checks for new HIGH/CRITICAL alerts
+        during an active voice session and injects them as text context so
+        Astra can proactively speak about them. Runs every 60 seconds.
+        """
+        # Track which alerts we've already surfaced to avoid repeats
+        surfaced_ids: set[str] = set()
+        CHECK_INTERVAL = 60  # seconds between checks
+
+        print("[proactive_alerts] Background alert checker started")
+        try:
+            # Wait before first check to let the session warm up
+            await asyncio.sleep(30)
+
+            while not self._closed:
+                try:
+                    from brain.models import AlertSeverity
+                    alerts = await self._brain_store.get_pending_alerts(
+                        self._founder_id, min_severity=AlertSeverity.HIGH
+                    )
+                    new_alerts = [a for a in alerts if a.id not in surfaced_ids]
+
+                    if new_alerts:
+                        alert = new_alerts[0]  # Surface one at a time
+                        surfaced_ids.add(alert.id)
+
+                        # Inject the alert as a text message into the live session
+                        alert_text = (
+                            f"[PROACTIVE ALERT — important, speak this to the founder now]\n"
+                            f"Severity: {alert.severity.value.upper()}\n"
+                            f"Alert: {alert.title}\n"
+                            f"Details: {alert.message}\n"
+                            f"Related to: {alert.related_contact or 'general'}\n"
+                            f"INSTRUCTION: Interrupt naturally and surface this alert. "
+                            f"Say something like 'Hey, heads up — ' then deliver the alert "
+                            f"concisely. Ask if they want to take action on it."
+                        )
+
+                        try:
+                            self._q.send_content(
+                                types.Content(
+                                    role="user",
+                                    parts=[types.Part.from_text(text=alert_text)]
+                                )
+                            )
+                            # Mark as surfaced in the brain
+                            await self._brain_store.mark_alert_surfaced(alert.id)
+                            print(f"[proactive_alerts] Injected alert: {alert.title}")
+                            await self._notify({
+                                "type": "tool_call",
+                                "name": "proactive_alert",
+                                "status": "done",
+                            })
+                        except Exception as inject_err:
+                            print(f"[proactive_alerts] Failed to inject: {inject_err}")
+
+                except Exception as check_err:
+                    print(f"[proactive_alerts] Check failed: {check_err}")
+
+                await asyncio.sleep(CHECK_INTERVAL)
+
+        except asyncio.CancelledError:
+            pass
+        print("[proactive_alerts] Background alert checker stopped")
+
     # ── Main entry point ──────────────────────────────────────────────────────
 
     async def run(self):
@@ -629,12 +705,16 @@ class GeminiLiveBridge:
         except Exception as e:
             print(f"[GeminiLive] Warning: could not send greeting: {e}")
 
-        # ── Step 9: Run upstream and downstream concurrently ──────────────────
+        # ── Step 9: Run upstream, downstream, and proactive alert checker concurrently
         try:
-            await asyncio.gather(
+            tasks_to_run = [
                 self._upstream_task(),
                 self._downstream_task(runner, adk_session_id, run_config),
-            )
+            ]
+            # Add proactive alert checker if brain is available
+            if self._brain_store and self._founder_id:
+                tasks_to_run.append(self._proactive_alert_task())
+            await asyncio.gather(*tasks_to_run)
         except Exception as e:
             print(f"[GeminiLive] Session error: {e}")
             await self._notify({"type": "error", "message": str(e)})
@@ -749,6 +829,16 @@ class GeminiLiveBridge:
         "save_memory_note": "🧠 saving to memory…",
         "get_past_conversations": "🧠 recalling past sessions…",
         "get_known_facts": "🧠 retrieving known facts…",
+        # New: Task Delegation
+        "create_task": "✅ creating task…",
+        "update_task": "✅ updating task…",
+        "get_team_tasks": "👥 checking team tasks…",
+        # New: CRM / Pipeline
+        "get_sales_pipeline": "📊 loading pipeline…",
+        # New: Meeting Prep
+        "get_meeting_prep": "📋 preparing briefing…",
+        # New: Weekly Digest
+        "get_weekly_digest": "📈 generating weekly digest…",
     }
 
     async def _downstream_task(self, runner: Runner, session_id: str, run_config: RunConfig):

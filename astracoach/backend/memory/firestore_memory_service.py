@@ -340,19 +340,52 @@ Rules:
 - Include names, dates, numbers when mentioned
 - Return ONLY valid JSON"""
 
-        try:
-            client = self._get_genai()
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model="gemini-2.0-flash",
-                contents=prompt,
-            )
-            raw = (response.text or "").strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw).strip()
-            data = json.loads(raw)
+        MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-2.5-flash"]
+        MAX_RETRIES = 2
+        client = self._get_genai()
+        data = None
 
-            # Store the episode
+        for model_name in MODELS:
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    print(f"[Memory] Episode: calling {model_name} (attempt {attempt}/{MAX_RETRIES}) "
+                          f"for session {session_id}")
+                    response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model=model_name,
+                        contents=prompt,
+                    )
+                    raw = (response.text or "").strip()
+                    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                    raw = re.sub(r"\s*```$", "", raw).strip()
+                    data = json.loads(raw)
+                    break
+
+                except json.JSONDecodeError as e:
+                    print(f"[Memory] Episode JSON parse failed ({model_name}): {e}")
+                    break
+
+                except Exception as e:
+                    err_str = str(e)
+                    is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+                    if is_rate_limit and attempt < MAX_RETRIES:
+                        print(f"[Memory] ⏳ Episode rate-limited on {model_name} — waiting 8s...")
+                        await asyncio.sleep(8)
+                        continue
+                    elif is_rate_limit:
+                        print(f"[Memory] ⚠️  {model_name} quota exhausted for episode. Trying next model...")
+                        break
+                    else:
+                        print(f"[Memory] ❌ Episode generation failed ({model_name}): {e}")
+                        break
+            if data is not None:
+                break
+
+        if data is None:
+            print(f"[Memory] ❌ All episode models failed for session {session_id}.")
+            return
+
+        try:
             db = self._get_db()
             episode_ref = (
                 db.collection(self.MEMORIES_COLLECTION)
@@ -379,10 +412,8 @@ Rules:
             print(f"[Memory] Episode stored for session {session_id}: "
                   f"topics={data.get('topics', [])}")
 
-        except json.JSONDecodeError as e:
-            print(f"[Memory] Episode JSON parse failed: {e}")
         except Exception as e:
-            print(f"[Memory] Episode generation failed: {e}")
+            print(f"[Memory] Episode storage failed: {e}")
 
     # ── Fact Extraction ─────────────────────────────────────────────────────
 
@@ -418,21 +449,55 @@ Rules:
 - Return empty array [] if no meaningful facts found
 - Return ONLY valid JSON"""
 
+        MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-2.5-flash"]
+        MAX_RETRIES = 2
+        client = self._get_genai()
+        facts = None
+
+        for model_name in MODELS:
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    print(f"[Memory] Facts: calling {model_name} (attempt {attempt}/{MAX_RETRIES}) "
+                          f"for session {session_id}")
+                    response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model=model_name,
+                        contents=prompt,
+                    )
+                    raw = (response.text or "").strip()
+                    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                    raw = re.sub(r"\s*```$", "", raw).strip()
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        facts = parsed
+                    break
+
+                except json.JSONDecodeError as e:
+                    print(f"[Memory] Facts JSON parse failed ({model_name}): {e}")
+                    break
+
+                except Exception as e:
+                    err_str = str(e)
+                    is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+                    if is_rate_limit and attempt < MAX_RETRIES:
+                        print(f"[Memory] ⏳ Facts rate-limited on {model_name} — waiting 8s...")
+                        await asyncio.sleep(8)
+                        continue
+                    elif is_rate_limit:
+                        print(f"[Memory] ⚠️  {model_name} quota exhausted for facts. Trying next model...")
+                        break
+                    else:
+                        print(f"[Memory] ❌ Fact extraction failed ({model_name}): {e}")
+                        break
+            if facts is not None:
+                break
+
+        if not facts:
+            if facts is None:
+                print(f"[Memory] ❌ All fact extraction models failed for session {session_id}.")
+            return
+
         try:
-            client = self._get_genai()
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model="gemini-2.0-flash",
-                contents=prompt,
-            )
-            raw = (response.text or "").strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw).strip()
-            facts = json.loads(raw)
-
-            if not facts or not isinstance(facts, list):
-                return
-
             db = self._get_db()
             batch = db.batch()
             facts_ref = (
@@ -459,7 +524,7 @@ Rules:
             print(f"[Memory] Extracted {len(facts)} facts from session {session_id}")
 
         except Exception as e:
-            print(f"[Memory] Fact extraction failed: {e}")
+            print(f"[Memory] Fact storage failed: {e}")
 
     # ── Search Helpers ──────────────────────────────────────────────────────
 

@@ -1,20 +1,15 @@
 /**
- * BrainDashboard.jsx — Astra OS Company Brain Dashboard
- * ======================================================
- * Collapsible panel showing real-time brain state:
- *   - Summary stats (insights, alerts, relationships, tasks)
- *   - Active alerts with dismiss action
- *   - Relationship health scores
- *   - Recent insights
- *
- * Polls /brain/summary every 30 seconds when expanded.
- * Only shows when the Astra persona is active.
+ * BrainDashboard.jsx — Astra OS Company Brain Dashboard (Dark Theme)
+ * ===================================================================
+ * NOTE: This component is no longer used in the main InterviewRoom layout
+ * (replaced by DashboardView.jsx), but kept for backward compatibility
+ * and standalone use.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
-const POLL_INTERVAL = 30000 // 30 seconds
+const POLL_INTERVAL = 30000
 
 export default function BrainDashboard({ isAstra = false }) {
   const [expanded, setExpanded] = useState(false)
@@ -45,7 +40,6 @@ export default function BrainDashboard({ isAstra = false }) {
     setLoading(false)
   }, [isAstra])
 
-  // Fetch on expand, then poll
   useEffect(() => {
     if (expanded && isAstra) {
       fetchData()
@@ -54,48 +48,26 @@ export default function BrainDashboard({ isAstra = false }) {
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [expanded, isAstra, fetchData])
 
-  const dismissAlert = async (alertId) => {
-    try {
-      await fetch(`${BACKEND}/brain/alerts/${alertId}/dismiss`, { method: 'POST' })
-      setAlerts(prev => prev.filter(a => a.id !== alertId))
-    } catch { /* ignore */ }
-  }
-
-  const triggerScan = async () => {
-    try {
-      const res = await fetch(`${BACKEND}/brain/scan`, { method: 'POST' })
-      const data = await res.json()
-      console.log('[BrainDashboard] scan result:', data)
-      fetchData() // refresh
-    } catch { /* ignore */ }
-  }
-
   if (!isAstra) return null
 
   return (
     <div style={S.wrapper}>
-      {/* Toggle button */}
       <button
-        style={{
-          ...S.toggleBtn,
-          ...(expanded ? S.toggleBtnActive : {}),
-        }}
+        style={{ ...S.toggleBtn, ...(expanded ? S.toggleBtnActive : {}) }}
         onClick={() => setExpanded(!expanded)}
       >
-        <span>🧠</span>
+        <span>&#9673;</span>
         <span style={S.toggleLabel}>Brain</span>
         {summary && summary.pending_alerts > 0 && (
           <span style={S.alertBadge}>{summary.pending_alerts}</span>
         )}
-        <span style={S.chevron}>{expanded ? '▾' : '▸'}</span>
+        <span style={S.chevron}>{expanded ? '\u25BE' : '\u25B8'}</span>
       </button>
 
-      {/* Expanded panel */}
       {expanded && (
         <div style={S.panel}>
-          {loading && !summary && <div style={S.loading}>Loading brain state…</div>}
+          {loading && !summary && <div style={S.loading}>Loading brain state...</div>}
 
-          {/* Summary stats */}
           {summary && (
             <div style={S.statsGrid}>
               <StatCard label="Insights" value={summary.active_insights} color="#3b82f6" />
@@ -106,44 +78,9 @@ export default function BrainDashboard({ isAstra = false }) {
             </div>
           )}
 
-          {/* Quick actions */}
-          <div style={S.actions}>
-            <button style={S.actionBtn} onClick={triggerScan} title="Scan emails now">
-              📧 Scan Emails
-            </button>
-            <button style={S.actionBtn} onClick={fetchData} title="Refresh brain state">
-              🔄 Refresh
-            </button>
-          </div>
-
-          {/* Alerts */}
-          {alerts.length > 0 && (
-            <div style={S.section}>
-              <div style={S.sectionTitle}>🔔 Pending Alerts</div>
-              {alerts.slice(0, 5).map(a => (
-                <div key={a.id} style={S.alertRow}>
-                  <div style={S.alertLeft}>
-                    <span style={{
-                      ...S.severityDot,
-                      background: a.severity === 'critical' ? '#ef4444'
-                        : a.severity === 'high' ? '#f59e0b'
-                        : '#3b82f6',
-                    }} />
-                    <div>
-                      <div style={S.alertTitle}>{a.title}</div>
-                      <div style={S.alertMsg}>{a.message?.slice(0, 80)}</div>
-                    </div>
-                  </div>
-                  <button style={S.dismissBtn} onClick={() => dismissAlert(a.id)}>✕</button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Relationships */}
           {relationships.length > 0 && (
             <div style={S.section}>
-              <div style={S.sectionTitle}>💚 Relationships</div>
+              <div style={S.sectionTitle}>Relationships</div>
               {relationships.slice(0, 6).map((r, i) => (
                 <div key={i} style={S.relRow}>
                   <span style={S.relName}>{r.name || r.contact_email}</span>
@@ -152,8 +89,7 @@ export default function BrainDashboard({ isAstra = false }) {
                       ...S.healthFill,
                       width: `${Math.round(r.health_score * 100)}%`,
                       background: r.health_score > 0.7 ? '#22c55e'
-                        : r.health_score > 0.4 ? '#f59e0b'
-                        : '#ef4444',
+                        : r.health_score > 0.4 ? '#f59e0b' : '#ef4444',
                     }} />
                   </div>
                   <span style={S.healthPct}>{Math.round(r.health_score * 100)}%</span>
@@ -162,36 +98,8 @@ export default function BrainDashboard({ isAstra = false }) {
             </div>
           )}
 
-          {/* Recent insights */}
-          {insights.length > 0 && (
-            <div style={S.section}>
-              <div style={S.sectionTitle}>💡 Recent Insights</div>
-              {insights.slice(0, 5).map((ins, i) => (
-                <div key={i} style={S.insightRow}>
-                  <span style={{
-                    ...S.insightType,
-                    background: ins.type === 'commitment' ? '#dbeafe'
-                      : ins.type === 'risk' ? '#fee2e2'
-                      : ins.type === 'decision' ? '#f3e8ff'
-                      : '#dcfce7',
-                    color: ins.type === 'commitment' ? '#2563eb'
-                      : ins.type === 'risk' ? '#dc2626'
-                      : ins.type === 'decision' ? '#7c3aed'
-                      : '#16a34a',
-                  }}>
-                    {ins.type}
-                  </span>
-                  <span style={S.insightText}>{ins.content?.slice(0, 70)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Empty state */}
           {summary && summary.active_insights === 0 && alerts.length === 0 && (
-            <div style={S.empty}>
-              Brain is empty — scan emails to populate it.
-            </div>
+            <div style={S.empty}>Brain is empty — scan emails to populate it.</div>
           )}
         </div>
       )}
@@ -208,7 +116,6 @@ function StatCard({ label, value, color }) {
   )
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
 const S = {
   wrapper: {
     position: 'absolute', top: 14, right: 14,
@@ -217,14 +124,15 @@ const S = {
   toggleBtn: {
     display: 'flex', alignItems: 'center', gap: 6,
     padding: '6px 12px', borderRadius: 10,
-    background: '#ffffff', border: '1px solid #e5e7eb',
-    color: '#374151', fontSize: 12, fontWeight: 600,
-    cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-    transition: 'all 0.2s',
+    background: 'rgba(255,255,255,0.05)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    color: 'rgba(238,240,250,0.7)', fontSize: 12, fontWeight: 600,
+    cursor: 'pointer', transition: 'all 0.2s',
   },
   toggleBtnActive: {
-    background: '#f3e8ff', border: '1px solid #c4b5fd',
-    color: '#7c3aed',
+    background: 'rgba(124,58,237,0.15)',
+    border: '1px solid rgba(124,58,237,0.3)',
+    color: '#c4b5fd',
   },
   toggleLabel: { letterSpacing: '-0.01em' },
   alertBadge: {
@@ -234,74 +142,40 @@ const S = {
     minWidth: 16, textAlign: 'center',
   },
   chevron: { fontSize: 10, opacity: 0.6 },
-
   panel: {
-    marginTop: 6, width: 320,
-    background: '#ffffff', border: '1px solid #e5e7eb',
+    marginTop: 6, width: 300,
+    background: 'rgba(14,14,26,0.9)',
+    border: '1px solid rgba(255,255,255,0.08)',
     borderRadius: 14, padding: 12,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.1)',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+    backdropFilter: 'blur(16px)',
     maxHeight: 'calc(100vh - 160px)', overflowY: 'auto',
     display: 'flex', flexDirection: 'column', gap: 10,
   },
-  loading: { fontSize: 11, color: '#9ca3af', textAlign: 'center', padding: 12 },
-
-  statsGrid: {
-    display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6,
-  },
+  loading: { fontSize: 11, color: 'rgba(238,240,250,0.4)', textAlign: 'center', padding: 12 },
+  statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 },
   statCard: {
     textAlign: 'center', padding: '8px 4px',
-    background: '#f9fafb', borderRadius: 8,
-    border: '1px solid #f3f4f6',
+    background: 'rgba(255,255,255,0.03)', borderRadius: 8,
+    border: '1px solid rgba(255,255,255,0.04)',
   },
   statValue: { fontSize: 18, fontWeight: 700, lineHeight: 1 },
-  statLabel: { fontSize: 9, fontWeight: 600, color: '#6b7280', marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.05em' },
-
-  actions: { display: 'flex', gap: 6 },
-  actionBtn: {
-    flex: 1, padding: '5px 8px', borderRadius: 8,
-    background: '#f9fafb', border: '1px solid #e5e7eb',
-    color: '#374151', fontSize: 11, fontWeight: 600,
-    cursor: 'pointer',
+  statLabel: {
+    fontSize: 9, fontWeight: 600, color: 'rgba(238,240,250,0.4)',
+    marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.05em',
   },
-
   section: { display: 'flex', flexDirection: 'column', gap: 4 },
   sectionTitle: {
-    fontSize: 11, fontWeight: 700, color: '#374151',
-    borderBottom: '1px solid #f3f4f6', paddingBottom: 4,
+    fontSize: 11, fontWeight: 700, color: 'rgba(238,240,250,0.5)',
+    borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: 4,
   },
-
-  alertRow: {
-    display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-    padding: '6px 8px', borderRadius: 8, background: '#fef2f2',
-    border: '1px solid #fecaca',
+  relRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' },
+  relName: {
+    fontSize: 11, color: 'rgba(238,240,250,0.7)', fontWeight: 500,
+    width: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
-  alertLeft: { display: 'flex', gap: 8, alignItems: 'flex-start', flex: 1 },
-  severityDot: { width: 8, height: 8, borderRadius: '50%', marginTop: 4, flexShrink: 0 },
-  alertTitle: { fontSize: 11, fontWeight: 600, color: '#111827' },
-  alertMsg: { fontSize: 10, color: '#6b7280', marginTop: 1 },
-  dismissBtn: {
-    background: 'none', border: 'none', color: '#9ca3af',
-    fontSize: 12, cursor: 'pointer', padding: '2px 4px',
-  },
-
-  relRow: {
-    display: 'flex', alignItems: 'center', gap: 8,
-    padding: '4px 0',
-  },
-  relName: { fontSize: 11, color: '#374151', fontWeight: 500, width: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  healthBar: { flex: 1, height: 6, borderRadius: 3, background: '#f3f4f6', overflow: 'hidden' },
-  healthFill: { height: '100%', borderRadius: 3, transition: 'width 0.3s' },
-  healthPct: { fontSize: 10, fontWeight: 600, color: '#6b7280', width: 32, textAlign: 'right' },
-
-  insightRow: {
-    display: 'flex', alignItems: 'center', gap: 8,
-    padding: '4px 0',
-  },
-  insightType: {
-    fontSize: 9, fontWeight: 700, padding: '2px 6px',
-    borderRadius: 4, textTransform: 'uppercase', flexShrink: 0,
-  },
-  insightText: { fontSize: 11, color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-
-  empty: { fontSize: 11, color: '#9ca3af', textAlign: 'center', padding: 16 },
+  healthBar: { flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' },
+  healthFill: { height: '100%', borderRadius: 2, transition: 'width 0.3s' },
+  healthPct: { fontSize: 10, fontWeight: 600, color: 'rgba(238,240,250,0.5)', width: 32, textAlign: 'right' },
+  empty: { fontSize: 11, color: 'rgba(238,240,250,0.3)', textAlign: 'center', padding: 16 },
 }

@@ -20,6 +20,7 @@ Tool groups:
 from __future__ import annotations
 
 import asyncio
+import os
 import time as _time
 from typing import TYPE_CHECKING, Any
 
@@ -1106,6 +1107,374 @@ def build_tools(deps: ToolDeps) -> dict:
         deps.cache.put("brain_summary", result, ttl=60)
         return result
 
+    async def create_task(
+        title: str,
+        assignee: str = "",
+        due_date: str = "",
+        description: str = "",
+        notes: str = "",
+    ) -> dict:
+        """
+        Create a new task in the Company Brain and optionally assign it to a team member.
+        Use when the founder says things like "assign X to Priya" or "create a task for...".
+
+        Args:
+            title: Task title (e.g. "Deliver website design assets")
+            assignee: Name or email of person responsible (optional)
+            due_date: Due date in ISO format e.g. "2026-03-20" (optional)
+            description: Detailed description of what needs to be done
+            notes: Additional context or notes
+
+        Returns:
+            Dict with task id, title, assignee, status
+        """
+        from brain.models import Task as BrainTask
+        task = BrainTask(
+            founder_id=deps.founder_id,
+            title=title,
+            description=description,
+            assignee=assignee,
+            due_date=due_date or None,
+            notes=notes,
+        )
+        task_id = await deps.store.add_task(task)
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "title": title,
+            "assignee": assignee or "(unassigned)",
+            "due_date": due_date or "(no due date)",
+            "status": "pending",
+        }
+
+    async def update_task(
+        task_id: str,
+        status: str = "",
+        assignee: str = "",
+        notes: str = "",
+    ) -> dict:
+        """
+        Update an existing task's status, assignee, or notes.
+        Status options: pending, in_progress, blocked, done
+
+        Args:
+            task_id: The ID of the task to update
+            status: New status (pending/in_progress/blocked/done)
+            assignee: New assignee name or email
+            notes: Additional notes to append
+
+        Returns:
+            {"ok": true}
+        """
+        if status:
+            status_enum = TaskStatus(status.lower())
+            await deps.store.update_task_status(task_id, status_enum)
+        return {"ok": True, "task_id": task_id, "updated": True}
+
+    async def get_team_tasks(assignee: str = "") -> list[dict]:
+        """
+        Get tasks filtered by assignee. If no assignee given, returns all open tasks
+        grouped by person. Use when founder asks "what does Raj have?" or "show team tasks".
+
+        Args:
+            assignee: Optional name/email to filter by
+
+        Returns:
+            List of task dicts with title, assignee, due_date, status
+        """
+        tasks = await deps.store.get_open_tasks(deps.founder_id)
+        if assignee:
+            assignee_lower = assignee.lower()
+            tasks = [t for t in tasks if assignee_lower in (t.assignee or "").lower()]
+        return [
+            {
+                "id": t.id,
+                "title": t.title,
+                "assignee": t.assignee or "(unassigned)",
+                "due_date": t.due_date or "(no due date)",
+                "status": t.status.value,
+                "notes": t.notes,
+            }
+            for t in tasks
+        ]
+
+    async def get_sales_pipeline() -> dict:
+        """
+        Get a CRM-style sales pipeline overview built from relationship data.
+        Shows contacts grouped by deal stage based on relationship health and
+        interaction patterns. Use when founder asks about deals, pipeline, sales.
+
+        Returns:
+            Dict with pipeline stages and contacts in each
+        """
+        profiles = await deps.store.get_all_relationships(deps.founder_id)
+        pipeline = {
+            "hot_leads": [],       # health > 0.7, recent contact
+            "warm_prospects": [],  # health 0.4-0.7
+            "at_risk": [],         # health < 0.4
+            "total_contacts": len(profiles),
+        }
+        import time as _t
+        now = _t.time()
+        for p in profiles:
+            entry = {
+                "name": p.name or p.contact_email,
+                "email": p.contact_email,
+                "health_score": round(p.health_score * 100),
+                "tone": p.tone_trend.value,
+                "last_contact_days": round((now - p.last_contact_at) / 86400) if p.last_contact_at else None,
+                "open_commitments": p.open_commitments,
+            }
+            if p.health_score >= 0.7:
+                pipeline["hot_leads"].append(entry)
+            elif p.health_score >= 0.4:
+                pipeline["warm_prospects"].append(entry)
+            else:
+                pipeline["at_risk"].append(entry)
+        return pipeline
+
+    async def get_meeting_prep(contact_email: str = "", meeting_title: str = "") -> dict:
+        """
+        Prepare a comprehensive briefing for an upcoming meeting.
+        Combines relationship health, email history, open commitments,
+        and past conversations for a specific contact or meeting.
+        Use when founder says "prep me for my call with X" or "what should I know before the meeting?".
+
+        Args:
+            contact_email: Email of the person they're meeting with
+            meeting_title: Title of the meeting (used to find attendees if no email given)
+
+        Returns:
+            Dict with relationship summary, recent emails, open commitments, talking points
+        """
+        prep = {
+            "contact": contact_email or meeting_title,
+            "relationship": None,
+            "recent_emails": [],
+            "open_commitments": [],
+            "suggested_talking_points": [],
+        }
+
+        # Get relationship data
+        if contact_email:
+            profile = await deps.store.get_relationship(deps.founder_id, contact_email)
+            if profile:
+                prep["relationship"] = {
+                    "name": profile.name,
+                    "health_score": round(profile.health_score * 100),
+                    "tone_trend": profile.tone_trend.value,
+                    "open_commitments": profile.open_commitments,
+                    "recent_signals": profile.recent_signals[-3:],
+                }
+
+            # Get recent emails from this person
+            try:
+                emails = await deps.gmail.get_emails_from_sender(
+                    sender_email=contact_email, max_results=5
+                )
+                prep["recent_emails"] = [
+                    {"subject": e.subject, "date": e.timestamp, "preview": e.body[:200]}
+                    for e in emails
+                ]
+            except Exception:
+                pass
+
+        # Get related commitments
+        try:
+            commitments = await deps.store.get_active_insights(
+                deps.founder_id, insight_type=InsightType.COMMITMENT, limit=20
+            )
+            if contact_email:
+                commitments = [c for c in commitments if contact_email.lower() in " ".join(c.parties).lower()]
+            prep["open_commitments"] = [
+                {"content": c.content, "due_date": c.due_date, "parties": c.parties}
+                for c in commitments[:5]
+            ]
+        except Exception:
+            pass
+
+        # Generate talking points
+        points = []
+        if prep["relationship"] and prep["relationship"]["health_score"] < 50:
+            points.append("Relationship health is below 50% — prioritise rebuilding trust")
+        if prep["open_commitments"]:
+            overdue = [c for c in prep["open_commitments"] if c.get("due_date")]
+            if overdue:
+                points.append(f"You have {len(overdue)} open commitments with this person")
+        if prep["recent_emails"]:
+            points.append(f"Last email exchange: {prep['recent_emails'][0].get('subject', 'N/A')}")
+        prep["suggested_talking_points"] = points
+
+        return prep
+
+    async def get_weekly_digest() -> dict:
+        """
+        Generate a comprehensive weekly digest covering all brain activity.
+        Use when founder says "give me the weekly briefing" or "weekly update".
+
+        Returns:
+            Dict with email stats, commitment status, relationship health, task progress, alerts
+        """
+        import time as _t
+        now = _t.time()
+        week_ago = now - (7 * 86400)
+
+        # Gather all data in parallel
+        insights, at_risk, tasks, alerts, overdue = await asyncio.gather(
+            deps.store.get_active_insights(deps.founder_id, limit=100),
+            deps.store.get_at_risk_relationships(deps.founder_id, threshold=0.5),
+            deps.store.get_open_tasks(deps.founder_id),
+            deps.store.get_pending_alerts(deps.founder_id),
+            deps.store.get_overdue_commitments(deps.founder_id),
+        )
+
+        # Count recent insights by type
+        recent = [i for i in insights if i.created_at >= week_ago]
+        type_counts = {}
+        for i in recent:
+            type_counts[i.type.value] = type_counts.get(i.type.value, 0) + 1
+
+        # Task stats
+        done_tasks = [t for t in tasks if t.status == TaskStatus.DONE]
+        blocked_tasks = [t for t in tasks if t.status == TaskStatus.BLOCKED]
+        pending_tasks = [t for t in tasks if t.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS)]
+
+        return {
+            "period": "Last 7 days",
+            "insights_this_week": len(recent),
+            "insight_breakdown": type_counts,
+            "overdue_commitments": len(overdue),
+            "at_risk_relationships": [
+                {"name": p.name or p.contact_email, "health": round(p.health_score * 100)}
+                for p in at_risk[:5]
+            ],
+            "tasks": {
+                "open": len(pending_tasks),
+                "blocked": len(blocked_tasks),
+                "completed_this_period": len(done_tasks),
+            },
+            "pending_alerts": len(alerts),
+            "top_alerts": [
+                {"title": a.title, "severity": a.severity.value}
+                for a in alerts[:3]
+            ],
+        }
+
+    # ── Enhanced Task Tools ────────────────────────────────────────────────
+
+    async def get_all_team_tasks(assignee: str = "") -> dict:
+        """Get all tasks. If assignee is specified, filter by that team member's name."""
+        all_tasks = await deps.store.get_all_tasks(deps.founder_id)
+        if assignee:
+            all_tasks = [t for t in all_tasks if assignee.lower() in t.assignee.lower()]
+        by_status = {}
+        for t in all_tasks:
+            s = t.status.value if hasattr(t.status, 'value') else t.status
+            by_status.setdefault(s, []).append(t.to_firestore())
+        return {
+            "total": len(all_tasks),
+            "by_status": by_status,
+        }
+
+    async def update_task_priority(task_id: str, priority: str) -> dict:
+        """Update a task's priority. Priority must be: low, medium, high, or urgent."""
+        await deps.store.update_task(task_id, {"priority": priority})
+        return {"ok": True, "task_id": task_id, "new_priority": priority}
+
+    async def add_comment_to_task(task_id: str, comment: str) -> dict:
+        """Add a comment or update note to a task."""
+        await deps.store.add_task_comment(task_id, comment, "Astra")
+        return {"ok": True, "task_id": task_id}
+
+    async def reassign_task(task_id: str, new_assignee: str) -> dict:
+        """Reassign a task to a different team member."""
+        await deps.store.update_task(task_id, {"assignee": new_assignee})
+        return {"ok": True, "task_id": task_id, "new_assignee": new_assignee}
+
+    # ── Email Routing Tools ────────────────────────────────────────────────
+
+    async def classify_and_route_email(sender: str, subject: str, snippet: str, sender_email: str = "") -> dict:
+        """Classify an incoming email and route it to the appropriate team (Sales, Support, Engineering, etc). Call this when the founder mentions a customer email or asks to route an email."""
+        import aiohttp
+        backend = os.environ.get("BACKEND_URL", "http://localhost:8000")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{backend}/brain/emails/classify", json={
+                "sender": sender, "subject": subject, "snippet": snippet,
+                "sender_email": sender_email or sender,
+            }) as resp:
+                return await resp.json()
+
+    async def get_routed_emails(team_name: str = "", limit: int = 20) -> dict:
+        """Get recently routed emails, optionally filtered by team name."""
+        emails = await deps.store.get_routed_emails(deps.founder_id, limit)
+        if team_name:
+            emails = [e for e in emails if team_name.lower() in e.routed_to_team_name.lower()]
+        return {
+            "total": len(emails),
+            "emails": [e.to_firestore() for e in emails],
+        }
+
+    async def create_routing_rule_voice(
+        rule_name: str,
+        team_name: str,
+        category: str = "",
+        keywords: str = "",
+        sender_domains: str = ""
+    ) -> dict:
+        """Create an email routing rule by voice. Example: 'Route all demo requests to Sales team'.
+        category: sales|support|engineering|partnerships|personal
+        keywords: comma-separated keywords to match (e.g. 'demo,pricing,trial')
+        sender_domains: comma-separated domains (e.g. 'acme.com,bigco.org')
+        """
+        teams = await deps.store.get_teams(deps.founder_id)
+        matched = next((t for t in teams if team_name.lower() in t.name.lower()), None)
+        if not matched:
+            return {"error": f"Team '{team_name}' not found. Available: {[t.name for t in teams]}"}
+
+        from brain.models import RoutingRule
+        conditions = {}
+        if category:
+            conditions["category"] = category
+        if keywords:
+            conditions["keywords"] = [k.strip() for k in keywords.split(",")]
+        if sender_domains:
+            conditions["sender_domains"] = [d.strip() for d in sender_domains.split(",")]
+
+        rule = RoutingRule(
+            founder_id=deps.founder_id, name=rule_name,
+            team_id=matched.id, conditions=conditions,
+        )
+        await deps.store.add_routing_rule(rule)
+        return {"ok": True, "rule_id": rule.id, "rule_name": rule_name, "team": matched.name}
+
+    async def get_email_routing_summary() -> dict:
+        """Get a summary of email routing activity — how many emails routed to each team, recent activity."""
+        emails = await deps.store.get_routed_emails(deps.founder_id, 100)
+        by_team = {}
+        by_category = {}
+        for e in emails:
+            tn = e.routed_to_team_name or "Unrouted"
+            by_team[tn] = by_team.get(tn, 0) + 1
+            by_category[e.category] = by_category.get(e.category, 0) + 1
+        return {
+            "total_routed": len(emails),
+            "by_team": by_team,
+            "by_category": by_category,
+            "recent": [e.to_firestore() for e in emails[:5]],
+        }
+
+    async def create_team_voice(team_name: str, members: str = "", color: str = "#4f7dff") -> dict:
+        """Create a new team for email routing and task assignment. members is comma-separated names or emails."""
+        from brain.models import Team
+        member_list = []
+        if members:
+            for m in members.split(","):
+                m = m.strip()
+                member_list.append({"name": m, "email": "", "role": "member"})
+        team = Team(founder_id=deps.founder_id, name=team_name, members=member_list, color=color)
+        await deps.store.add_team(team)
+        return {"ok": True, "team_id": team.id, "team_name": team_name, "members": member_list}
+
     # ── Return all tools as a name → function mapping ─────────────────────
 
     return {
@@ -1120,10 +1489,18 @@ def build_tools(deps: ToolDeps) -> dict:
         "get_relationship_health":  get_relationship_health,
         "get_at_risk_relationships": get_at_risk_relationships,
         "get_all_relationships":    get_all_relationships,
-        # Brain Tasks
+        # Brain Tasks (internal team tasks)
         "get_open_tasks":           get_open_tasks,
+        "create_task":              create_task,
+        "update_task":              update_task,
+        "get_team_tasks":           get_team_tasks,
         "mark_task_done":           mark_task_done,
         "mark_task_blocked":        mark_task_blocked,
+        # Enhanced Tasks
+        "get_all_team_tasks":       get_all_team_tasks,
+        "update_task_priority":     update_task_priority,
+        "add_comment_to_task":      add_comment_to_task,
+        "reassign_task":            reassign_task,
         # Alerts
         "get_pending_alerts":       get_pending_alerts,
         "dismiss_alert":            dismiss_alert,
@@ -1165,4 +1542,16 @@ def build_tools(deps: ToolDeps) -> dict:
         # Company
         "get_company_context":      get_company_context,
         "get_brain_summary":        get_brain_summary,
+        # CRM / Pipeline
+        "get_sales_pipeline":       get_sales_pipeline,
+        # Meeting Prep
+        "get_meeting_prep":         get_meeting_prep,
+        # Weekly Digest
+        "get_weekly_digest":        get_weekly_digest,
+        # Email Routing
+        "classify_and_route_email": classify_and_route_email,
+        "get_routed_emails":        get_routed_emails,
+        "create_routing_rule_voice": create_routing_rule_voice,
+        "get_email_routing_summary": get_email_routing_summary,
+        "create_team_voice":        create_team_voice,
     }
