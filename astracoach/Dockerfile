@@ -41,6 +41,10 @@ COPY backend/ ./
 # Copy built frontend into ./static
 COPY --from=frontend /app/frontend/dist ./static
 
+# Non-root user for security
+RUN useradd --create-home --shell /bin/bash appuser
+USER appuser
+
 # Cloud Run required env
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1

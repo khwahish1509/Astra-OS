@@ -28,7 +28,7 @@ import { useSimliAvatar } from './hooks/useSimliAvatar'
 import { useTheme, ThemeToggle } from './ThemeContext'
 
 const SIMLI_API_KEY = import.meta.env.VITE_SIMLI_API_KEY || ''
-const SIMLI_FACE_ID = import.meta.env.VITE_SIMLI_FACE_ID || 'tmp9i8bbq7c'
+const SIMLI_FACE_ID = import.meta.env.VITE_SIMLI_FACE_ID || ''
 const SIMLI_ENABLED = Boolean(SIMLI_API_KEY)
 
 // ── Sidebar navigation items ────────────────────────────────────────────────

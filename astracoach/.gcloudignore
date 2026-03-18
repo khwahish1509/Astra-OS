@@ -16,9 +16,14 @@ backend/test_*.py
 frontend/node_modules/
 frontend/dist/
 
-# Credentials (never upload)
+# Credentials and secrets (never upload)
+.env
+.env.*
+backend/.env
+frontend/.env.local
 backend/gmail_token.json
 backend/credentials.json
+*-key.json
 
 # IDE
 .vscode/
