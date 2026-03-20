@@ -62,7 +62,7 @@ Every startup founder drowns in context-switching: 50 unread emails, 6 meetings,
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  GeminiLiveBridge — Real-time voice session manager          │   │
 │  │  • Proxies browser audio ↔ Gemini Live API                  │   │
-│  │  • Dispatches 51+ ADK FunctionTools during live stream      │   │
+│  │  • Dispatches 60 ADK FunctionTools during live stream       │   │
 │  │  • Routes transcript events to browser                       │   │
 │  │  • Post-session summarization → long-term memory            │   │
 │  └──────────────────────────────────────────────────────────────┘   │

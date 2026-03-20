@@ -31,9 +31,6 @@ Astra OS is an AI operating system for startup founders. Instead of switching be
 
 Gemini 2.5 Flash Native Audio · Google ADK · Cloud Run · Cloud Build · Firestore · Secret Manager
 
-<<<<<<< Updated upstream
-**[→ See full documentation, architecture, and setup instructions](./astracoach/README.md)**
-=======
 | Layer | Technology |
 |---|---|
 | **LLM + Voice** | Gemini 2.5 Flash Native Audio (Live API) |
@@ -319,6 +316,4 @@ Astra OS isn't a chatbot with a voice wrapper. Here's what makes it genuinely mu
 
 *Built for the Gemini Live Agent Challenge · Gemini 2.5 Flash + Google ADK + Cloud Run + Firestore*
 
-=======
 **[→ See full documentation, architecture, reproducible testing instructions, and setup guide](./astracoach/README.md)**
->>>>>>> Stashed changes
