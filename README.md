@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Astra OS — Your AI Chief of Staff
 
 > **Voice-first AI Chief of Staff for startup founders, powered 100% by Google Gemini.**
@@ -452,4 +451,4 @@ Astra OS isn't a chatbot with a voice wrapper. Here's what makes it genuinely mu
 ---
 
 *Built for the Gemini Live Agent Challenge · Gemini 2.5 Flash + Google ADK + Cloud Run + Firestore*
->>>>>>> 91d4ba8038b45e0bca8eff970a23a236e72e5d53
+
