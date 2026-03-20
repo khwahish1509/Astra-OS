@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────
+# Astra OS — Root .gitignore
+# ─────────────────────────────────────────────────────────────────
+
+# Environment files (contain API keys and secrets)
+.env
+.env.local
+.env.production
+.env.staging
+.env.*.local
+**/.env
+**/.env.local
+
+# Google Cloud credentials (NEVER commit)
+credentials.json
+gmail_token.json
+**/credentials.json
+**/gmail_token.json
+*-key.json
+*-credentials.json
+service-account*.json
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+venv/
+.venv/
+env/
+
+# Node
+node_modules/
+**/node_modules/
+**/dist/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Logs
+*.log
+npm-debug.log*
+
+# Build artifacts
+*.tar.gz
+
+# Old project folder (pre-pivot)
+astraos/
+
+# Internal planning docs
+ASTRA_OS_UI_VISION.md
