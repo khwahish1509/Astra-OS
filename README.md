@@ -4,13 +4,7 @@
 
 Built for the [Gemini Live Agent Challenge](https://geminiliveagentchallenge.devpost.com)
 
----
-
-## Quick Links
-
-- **[Full Documentation & Setup →](./astracoach/README.md)**
-- **[Live Demo →](https://astracoach-rypr3jtzka-uc.a.run.app)**
-- **[Demo Video →](https://youtu.be/SM4bN-dSvGk)**
+**Live Demo:** [astracoach-rypr3jtzka-uc.a.run.app](https://astracoach-rypr3jtzka-uc.a.run.app) · **[Demo Video](https://youtu.be/SM4bN-dSvGk)** · **[Full Docs & Setup →](./astracoach/README.md)**
 
 ---
 
@@ -22,149 +16,22 @@ Astra OS is an AI operating system for startup founders. Instead of switching be
 
 | Feature | Description |
 |---|---|
-| Voice-native | Gemini 2.5 Flash Native Audio — real-time bidirectional PCM streaming |
-| 60 voice tools | Gmail, Calendar, Drive, Tasks, Contacts, Company Brain — all by voice |
-| Company Brain | Firestore vector search — every conversation enriches long-term memory |
-| Multi-agent | 3 concurrent agents: VoiceAgent, EmailScanner, RiskMonitor |
-| Screen vision | Share your screen and Astra analyzes what you're looking at |
-| Natural barge-in | Interrupt mid-sentence — Gemini's native VAD handles it gracefully |
+| **Voice-native** | Gemini 2.5 Flash Native Audio — real-time bidirectional PCM streaming |
+| **60 voice tools** | Gmail, Calendar, Drive, Tasks, Contacts, Company Brain — all by voice |
+| **Company Brain** | Firestore vector search — every conversation enriches long-term memory |
+| **Multi-agent** | 3 concurrent agents: VoiceAgent, EmailScanner, RiskMonitor |
+| **Screen vision** | Share your screen and Astra analyzes what you're looking at |
+| **Natural barge-in** | Interrupt mid-sentence — Gemini's native VAD handles it gracefully |
 
 **Zero third-party AI.** One Google API key. One model. One platform.
-=======
-# Astra OS — The Founder's Operating System
-
-> **Voice-first AI Chief of Staff powered 100% by Google.**
-> *Built for the [Gemini Live Agent Challenge](https://geminiliveagentchallenge.devpost.com)*
-
-**Live Demo:** [astracoach-rypr3jtzka-uc.a.run.app](https://astracoach-rypr3jtzka-uc.a.run.app)
-
----
-
-## The Problem
-
-Every startup founder drowns in context-switching: 50 unread emails, 6 meetings, missed follow-ups, and no idea what to prioritize. Existing tools add more tabs, more notifications, more cognitive load.
-
-**Astra changes that.** Instead of opening 10 apps, founders talk to one AI that sees everything — their calendar, inbox, company brain, and team tasks — and acts on it in real-time.
-
----
-
-## What Astra Does
-
-| Capability | How It Works |
-|---|---|
-| **Hears you naturally** | Gemini 2.5 Flash Native Audio — real-time PCM16 bidirectional streaming |
-| **Speaks back as a human** | Native audio synthesis, zero TTS middleware, zero latency |
-| **Sees your screen & camera** | JPEG frames streamed to Gemini Live vision in real-time |
-| **Can be interrupted** | Native VAD (Voice Activity Detection) handles barge-in gracefully |
-| **Remembers everything** | Firestore-powered long-term memory — facts, episodes, semantic search |
-| **Routes your emails** | AI email classification + team routing via Gemini |
-| **Manages your tasks** | Voice-created Kanban board with priorities, assignees, due dates |
-| **Tracks relationships** | CRM with health scores, tone analysis, follow-up alerts |
-| **Surfaces risks proactively** | Background agents monitor for overdue commitments and declining relationships |
-| **60 voice tools** | Calendar, email, Drive, Tasks, Contacts, brain queries — all by voice |
-
-**Zero third-party AI services.** One Google API key. One platform.
-
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  Browser (React + Vite)                                              │
-│                                                                      │
-│  ┌───────────────────┐  ┌────────────────────────────────────────┐  │
-│  │  AI Avatar         │  │  Dashboard / Brain / Tasks / CRM      │  │
-│  │  • FFT lip-sync    │  │  • Real-time KPIs                     │  │
-│  │  • State rings     │  │  • Kanban task board                  │  │
-│  │  • Camera feed     │  │  • Email routing inbox                │  │
-│  └───────────────────┘  │  • Relationship intelligence           │  │
-│                          │  • Company brain memory                │  │
-│  ┌───────────────────┐  │  • Calendar timeline                   │  │
-│  │  Audio Pipeline    │  └────────────────────────────────────────┘  │
-│  │  Mic → 16kHz PCM  │                                              │
-│  │  Speaker ← 24kHz  │                                              │
-│  └───────────────────┘                                              │
-└────────────────────────────┬─────────────────────────────────────────┘
-              WebSocket /ws/interview/{id}
-        (binary PCM16 audio + JSON control)
-                             │
-┌────────────────────────────▼─────────────────────────────────────────┐
-│  FastAPI Backend (Google Cloud Run)                                   │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  GeminiLiveBridge — Real-time voice session manager          │   │
-│  │  • Proxies browser audio ↔ Gemini Live API                  │   │
-│  │  • Dispatches 51+ ADK FunctionTools during live stream      │   │
-│  │  • Routes transcript events to browser                       │   │
-│  │  • Post-session summarization → long-term memory            │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Multi-Agent System (Google ADK)                              │   │
-│  │                                                               │   │
-│  │  VoiceAgent (primary)        — 60 voice tools, live session  │   │
-│  │  EmailScannerAgent (bg)      — scans inbox, extracts insights│   │
-│  │  RiskMonitorAgent (bg)       — detects risks, creates alerts │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Company Brain (Firestore Vector Search)                      │   │
-│  │  • Insights: commitments, risks, decisions, action items     │   │
-│  │  • Relationships: health scores, tone trends, follow-ups     │   │
-│  │  • Tasks: Kanban with priorities, tags, comments             │   │
-│  │  • Email routing: AI classification, team assignment         │   │
-│  │  • Long-term memory: facts, episodes, semantic search        │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Google Workspace Integrations                                │   │
-│  │  Gmail · Calendar · Drive · Tasks · Contacts                 │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-└────────────────────────────┬─────────────────────────────────────────┘
-                             │
-          ┌──────────────────▼──────────────────┐
-          │  Gemini 2.5 Flash Native Audio       │
-          │  Live API (google-genai SDK)         │
-          │  • PCM16 16kHz in / 24kHz out       │
-          │  • 8 built-in voices                │
-          │  • Tool calling during live stream   │
-          │  • Vision: JPEG inline images        │
-          │  • VAD + barge-in support            │
-          └─────────────────────────────────────┘
-```
-
----
-
-## Hackathon Requirements
-
-| Requirement | How We Satisfy It |
-|---|---|
-| Leverage a Gemini model | Gemini 2.5 Flash Native Audio (Live API) — the core of everything |
-| Google GenAI SDK or ADK | Both: `google-genai` for Live API + `google-adk` for 60 FunctionTools |
-| Google Cloud service | Cloud Run (hosting) + Cloud Build (CI/CD) + Firestore (vector search + memory) + Secret Manager |
-| Live Agents | Real-time bidirectional PCM16 audio + camera vision + barge-in + 3 concurrent agents |
-
----
-
-## Google Cloud Services Used
-
-| Service | Purpose |
-|---|---|
-| **Cloud Run** | Hosts the full-stack app with WebSocket support, auto-scaling |
-| **Cloud Build** | CI/CD pipeline — builds Docker image, pushes to Artifact Registry, deploys |
-| **Firestore** | Vector search for semantic memory, stores all brain data (insights, tasks, relationships, alerts) |
-| **Secret Manager** | Securely stores API keys and credentials |
-| **Artifact Registry** | Docker image storage |
->>>>>>> 91d4ba8038b45e0bca8eff970a23a236e72e5d53
 
 ---
 
 ## Tech Stack
 
-<<<<<<< HEAD
 Gemini 2.5 Flash Native Audio · Google ADK · Cloud Run · Cloud Build · Firestore · Secret Manager
 
+<<<<<<< Updated upstream
 **[→ See full documentation, architecture, and setup instructions](./astracoach/README.md)**
 =======
 | Layer | Technology |
@@ -452,3 +319,6 @@ Astra OS isn't a chatbot with a voice wrapper. Here's what makes it genuinely mu
 
 *Built for the Gemini Live Agent Challenge · Gemini 2.5 Flash + Google ADK + Cloud Run + Firestore*
 
+=======
+**[→ See full documentation, architecture, reproducible testing instructions, and setup guide](./astracoach/README.md)**
+>>>>>>> Stashed changes
