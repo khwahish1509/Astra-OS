@@ -15,6 +15,11 @@ Tool groups:
   Google Tasks        — list, create, complete tasks (personal to-dos)
   Google Contacts     — search, lookup contacts by email
   Company Context     — founder profile, team roster
+  Email Intelligence  — triage inbox, priority summary, scored emails, briefing,
+                        pipeline management, contact tiers, draft replies
+  RAG Email Search    — semantic search across email history
+  Voice-Matched Drafts — style-matched draft generation per recipient
+  Split Inbox         — auto-categorized inbox tabs with auto-learning
 """
 
 from __future__ import annotations
@@ -1475,6 +1480,328 @@ def build_tools(deps: ToolDeps) -> dict:
         await deps.store.add_team(team)
         return {"ok": True, "team_id": team.id, "team_name": team_name, "members": member_list}
 
+    # ── Email Intelligence Tools ─────────────────────────────────────────
+
+    async def triage_inbox(hours_back: int = 24) -> dict:
+        """
+        Run the full email intelligence pipeline on recent inbox. Scores, classifies,
+        and triages all new emails. Returns a summary with action-required items.
+
+        Args:
+            hours_back: How many hours back to scan (default 24)
+
+        Returns:
+            Summary with action_required count, critical/urgent counts, and top items
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(
+                    f"http://localhost:{port}/brain/emails/intelligence-scan",
+                    params={"hours_back": hours_back},
+                )
+                return resp.json()
+        except Exception as e:
+            return {"error": f"Triage failed: {e}"}
+
+    async def get_email_priority_summary() -> dict:
+        """
+        Get a high-level summary of the email pipeline showing counts by priority,
+        stage, and category. Useful for the founder to understand inbox state at a glance.
+
+        Returns:
+            Pipeline summary with breakdowns and action-required items
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(f"http://localhost:{port}/brain/emails/pipeline")
+                return resp.json()
+        except Exception as e:
+            return {"error": f"Pipeline summary failed: {e}"}
+
+    async def get_scored_emails_list(
+        priority: str = "",
+        stage: str = "",
+        limit: int = 20,
+    ) -> list[dict]:
+        """
+        Get scored emails filtered by priority or pipeline stage.
+
+        Args:
+            priority: Filter by priority level (critical/urgent/important/notable/low/noise). Empty = all.
+            stage: Filter by pipeline stage (action_required/triaged/delegated/done/archived). Empty = all.
+            limit: Max results (default 20)
+
+        Returns:
+            List of scored emails with score, priority, category, action, briefing
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            params = {"limit": limit}
+            if priority:
+                params["priority"] = priority
+            if stage:
+                params["stage"] = stage
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"http://localhost:{port}/brain/emails/scored", params=params
+                )
+                data = resp.json()
+                return data.get("emails", [])
+        except Exception as e:
+            return [{"error": f"Fetch failed: {e}"}]
+
+    async def get_email_briefing() -> dict:
+        """
+        Generate a prioritized inbox briefing for the founder.
+        Returns a natural-language summary plus detailed action items,
+        optimized for voice delivery.
+
+        Returns:
+            Briefing dict with summary counts, action_items list, and voice_briefing string
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(f"http://localhost:{port}/brain/emails/briefing")
+                return resp.json()
+        except Exception as e:
+            return {"error": f"Briefing failed: {e}"}
+
+    async def move_email_pipeline(
+        email_id: str,
+        stage: str,
+        delegated_to: str = "",
+        delegated_to_team: str = "",
+        notes: str = "",
+    ) -> dict:
+        """
+        Move an email to a different pipeline stage.
+
+        Args:
+            email_id: The email message ID
+            stage: Target stage (triaged/action_required/delegated/scheduled/replied/done/archived)
+            delegated_to: Email of person to delegate to (optional)
+            delegated_to_team: Team name to delegate to (optional)
+            notes: Notes about this stage change (optional)
+
+        Returns:
+            Confirmation dict
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            body = {"stage": stage}
+            if delegated_to:
+                body["delegated_to"] = delegated_to
+            if delegated_to_team:
+                body["delegated_to_team"] = delegated_to_team
+            if notes:
+                body["notes"] = notes
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.patch(
+                    f"http://localhost:{port}/brain/emails/{email_id}/stage",
+                    json=body,
+                )
+                return resp.json()
+        except Exception as e:
+            return {"error": f"Stage update failed: {e}"}
+
+    async def add_contact_tier(
+        email: str,
+        tier: int = 2,
+        name: str = "",
+    ) -> dict:
+        """
+        Add or update a contact's importance tier in the intelligence database.
+        Tier 1: VIP (investors, board, key customers). Tier 2: Active partner/vendor.
+        Tier 3: Known contact.
+
+        Args:
+            email: Contact's email address
+            tier: Importance tier (1, 2, or 3)
+            name: Contact's name for VIP matching (optional)
+
+        Returns:
+            Confirmation dict
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"http://localhost:{port}/brain/contacts/tier",
+                    json={"email": email, "tier": tier, "name": name},
+                )
+                return resp.json()
+        except Exception as e:
+            return {"error": f"Contact tier update failed: {e}"}
+
+    async def draft_reply_to_email(email_id: str) -> dict:
+        """
+        Get the AI-generated draft reply for a scored email.
+        The draft was generated during the intelligence pipeline scoring.
+
+        Args:
+            email_id: The email message ID to get draft reply for
+
+        Returns:
+            Dict with draft_reply text, original subject, sender, and context
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"http://localhost:{port}/brain/emails/{email_id}/detail"
+                )
+                data = resp.json()
+                return {
+                    "email_id": email_id,
+                    "sender": data.get("sender", ""),
+                    "subject": data.get("subject", ""),
+                    "draft_reply": data.get("draft_reply", "No draft reply available"),
+                    "briefing": data.get("briefing", ""),
+                    "priority": data.get("priority", ""),
+                    "action": data.get("action", ""),
+                }
+        except Exception as e:
+            return {"error": f"Draft reply fetch failed: {e}"}
+
+    # ── RAG Email Search + Voice-Matched Drafts + Split Inbox ────────────
+
+    async def search_email_history(query: str) -> dict:
+        """
+        Search the founder's entire email history using natural language.
+        Uses RAG: embeds query → vector search → re-rank → AI answer.
+
+        Args:
+            query: Natural language question like "What did Sarah say about Series A?"
+                   or "Find emails about pricing from last month"
+
+        Returns:
+            Answer with source citations and relevance scores
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"http://localhost:{port}/brain/emails/search",
+                    json={"query": query, "include_sent": True},
+                )
+                data = resp.json()
+                return {
+                    "answer": data.get("answer", ""),
+                    "sources": data.get("sources", [])[:5],
+                    "confidence": data.get("confidence", 0),
+                    "search_time_ms": data.get("search_time_ms", 0),
+                }
+        except Exception as e:
+            return {"error": f"Email search failed: {e}"}
+
+    async def generate_voice_draft(
+        recipient_email: str,
+        recipient_name: str = "",
+        thread_subject: str = "",
+        thread_body: str = "",
+        instruction: str = "",
+    ) -> dict:
+        """
+        Generate an email draft that matches the founder's writing style
+        for a specific recipient. Analyzes past sent emails for tone matching.
+
+        Args:
+            recipient_email: Email address of who we're replying to
+            recipient_name: Their name (optional, helps personalize)
+            thread_subject: Subject line of the email thread
+            thread_body: The email content we're replying to
+            instruction: What the founder wants to say, e.g. "Accept the meeting, suggest Tuesday"
+
+        Returns:
+            Draft text with style metadata and confidence score
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"http://localhost:{port}/brain/emails/draft",
+                    json={
+                        "recipient_email": recipient_email,
+                        "recipient_name": recipient_name,
+                        "thread_subject": thread_subject,
+                        "thread_body": thread_body,
+                        "instruction": instruction,
+                    },
+                )
+                return resp.json()
+        except Exception as e:
+            return {"error": f"Draft generation failed: {e}"}
+
+    async def get_split_inbox(split: str = "") -> dict:
+        """
+        Get emails organized by split inbox tabs: action_required, vip,
+        team, updates, newsletters, done, other.
+
+        Args:
+            split: Optional — filter to a specific split tab (e.g. "vip", "action_required").
+                   Empty returns all splits with counts.
+
+        Returns:
+            Dict with split tabs and their emails, plus count summary
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(f"http://localhost:{port}/brain/emails/splits")
+                data = resp.json()
+
+                if split:
+                    # Return just the requested split
+                    split_emails = data.get("splits", {}).get(split, [])
+                    return {
+                        "split": split,
+                        "count": len(split_emails),
+                        "emails": split_emails[:20],
+                    }
+                else:
+                    return {
+                        "counts": data.get("counts", {}),
+                        "total": data.get("total", 0),
+                    }
+        except Exception as e:
+            return {"error": f"Split inbox failed: {e}"}
+
+    async def sync_email_embeddings(hours_back: int = 720) -> dict:
+        """
+        Trigger email embedding sync for RAG search. Embeds recent inbox
+        and sent emails into vector storage for semantic search.
+
+        Args:
+            hours_back: How far back to sync (default 720 = 30 days)
+
+        Returns:
+            Sync stats: how many emails embedded
+        """
+        try:
+            import httpx
+            port = os.environ.get("PORT", "8000")
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                resp = await client.post(
+                    f"http://localhost:{port}/brain/emails/embed-sync",
+                    json={"hours_back": hours_back},
+                )
+                return resp.json()
+        except Exception as e:
+            return {"error": f"Embed sync failed: {e}"}
+
     # ── Return all tools as a name → function mapping ─────────────────────
 
     return {
@@ -1554,4 +1881,17 @@ def build_tools(deps: ToolDeps) -> dict:
         "create_routing_rule_voice": create_routing_rule_voice,
         "get_email_routing_summary": get_email_routing_summary,
         "create_team_voice":        create_team_voice,
+        # Email Intelligence (two-layer scoring pipeline)
+        "triage_inbox":             triage_inbox,
+        "get_email_priority_summary": get_email_priority_summary,
+        "get_scored_emails_list":   get_scored_emails_list,
+        "get_email_briefing":       get_email_briefing,
+        "move_email_pipeline":      move_email_pipeline,
+        "add_contact_tier":         add_contact_tier,
+        "draft_reply_to_email":     draft_reply_to_email,
+        # RAG Email Search + Voice-Matched Drafts + Split Inbox
+        "search_email_history":     search_email_history,
+        "generate_voice_draft":     generate_voice_draft,
+        "get_split_inbox":          get_split_inbox,
+        "sync_email_embeddings":    sync_email_embeddings,
     }

@@ -1,23 +1,23 @@
 """
-Astra OS — Background Agents
-==============================
-Two long-running background agents that run on a schedule:
+Astra OS — Background Agents v2.0
+===================================
+Three agent components running in the background:
 
-1. EmailScannerAgent
-   - Polls Gmail every N minutes
-   - Extracts insights (commitments, risks, decisions, action items)
-   - Updates relationship health scores
-   - Embeds each insight with text-embedding-004 and stores in Firestore
+1. EmailScannerAgent (v2.0 — UPGRADED)
+   - Two-layer intelligence: Rules Engine (8-pass scoring) + Gemini AI
+   - Deduplication: never re-processes the same email
+   - Thread depth analysis, sent mail tracking, auto-learning contacts
+   - Urgency detection, attachment + keyword detection, noise filtering
+   - Pipeline stages: New → Triaged → Action Required → Done
+   - Draft reply generation for high-priority emails
+   - Health monitoring with failure alerts
+   - Insight extraction + relationship health tracking
 
 2. RiskMonitorAgent
-   - Runs every N minutes after the email scan
-   - Checks for overdue commitments
-   - Detects declining relationship health
-   - Detects blocked tasks
-   - Creates Alert objects and stores them in Firestore
-   - Optionally triggers proactive voice via Gemini Live
+   - Overdue commitments, declining relationships, blocked tasks
+   - Creates Alert objects in Firestore
 
-Both agents use Gemini 2.0 Flash for fast, cheap inference.
+Both use Gemini 2.0 Flash for inference.
 """
 
 from __future__ import annotations
@@ -44,22 +44,29 @@ from brain.models import (
     RelationshipProfile, Task, TaskStatus, ToneTrend,
 )
 
+from agents.email_intelligence import (
+    EmailScoringEngine, EmailAIClassifier, EmailDeduplicator,
+    ScannerHealthMonitor, EmailIntelligencePipeline, ContactDatabase,
+    ScoredEmail, EmailPriority, PipelineStage,
+)
+
 
 EXTRACTION_MODEL = "gemini-2.0-flash"
 FALLBACK_MODEL   = "gemini-2.5-flash"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Email Scanner Agent
+# Email Scanner Agent v2.0 — Full Intelligence Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
 class EmailScannerAgent:
     """
-    Scans recent Gmail messages and extracts structured insights into
-    the Company Brain using Gemini for extraction + text-embedding-004 for storage.
+    Enterprise-grade email scanner with two-layer intelligence.
 
-    Runs in the background on a configurable interval.
-    Thread-safe — uses asyncio primitives only.
+    Layer 1: 8-pass rules engine (instant, free, handles ~85%)
+    Layer 2: Gemini AI classification (fast, ~$1/month, handles ~15%)
+
+    Also extracts business insights and updates relationship health.
     """
 
     def __init__(
@@ -81,6 +88,53 @@ class EmailScannerAgent:
         self._running     = False
         self._task: asyncio.Task | None = None
 
+        # ── Intelligence Pipeline Components ──────────────────────────────
+        self._contacts = ContactDatabase()
+        self._contacts.load_defaults()
+
+        self._scoring = EmailScoringEngine(
+            contacts=self._contacts,
+            founder_email="",  # Set after loading founder profile
+        )
+
+        self._ai_classifier = EmailAIClassifier(
+            api_key=api_key,
+            founder_context="",  # Set after loading founder profile
+        )
+
+        self._dedup = EmailDeduplicator(
+            store=store,
+            founder_id=founder_id,
+        )
+
+        self._health = ScannerHealthMonitor(alert_threshold=3)
+
+        self._pipeline = EmailIntelligencePipeline(
+            scoring_engine=self._scoring,
+            ai_classifier=self._ai_classifier,
+            deduplicator=self._dedup,
+            health_monitor=self._health,
+            store=store,
+            founder_id=founder_id,
+        )
+
+        self._initialized = False
+        self._scan_lock = asyncio.Lock()  # Prevent concurrent scans
+
+    # ── Public accessors ──────────────────────────────────────────────────
+
+    @property
+    def pipeline(self) -> EmailIntelligencePipeline:
+        return self._pipeline
+
+    @property
+    def health(self) -> ScannerHealthMonitor:
+        return self._health
+
+    @property
+    def contacts(self) -> ContactDatabase:
+        return self._contacts
+
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -88,7 +142,7 @@ class EmailScannerAgent:
         if not self._running:
             self._running = True
             self._task = asyncio.create_task(self._scan_loop())
-            print(f"[EmailScanner] 🚀 Started (interval={self._interval}s)")
+            print(f"[EmailScanner] 🚀 Started v2.0 (interval={self._interval}s)")
 
     async def stop(self) -> None:
         """Gracefully stop the scan loop."""
@@ -101,65 +155,238 @@ class EmailScannerAgent:
                 pass
         print("[EmailScanner] 🛑 Stopped")
 
-    async def run_once(self, hours_back: int = 24) -> int:
-        """Run a single scan pass. Returns number of insights extracted."""
-        return await self._scan(hours_back=hours_back)
+    async def run_once(self, hours_back: int = 24, max_fetch: int = 500) -> dict:
+        """Run a single scan pass. Returns summary of results. Locked to prevent concurrent scans."""
+        if self._scan_lock.locked():
+            print("[EmailScanner] ⚠️ Scan already in progress — skipping duplicate request")
+            return {"emails_fetched": 0, "emails_scored": 0, "insights_extracted": 0, "status": "already_running"}
+        async with self._scan_lock:
+            return await self._scan(hours_back=hours_back, max_fetch=max_fetch)
+
+    # ── Initialization (one-time setup) ───────────────────────────────────
+
+    async def _initialize(self) -> None:
+        """One-time initialization: load founder profile, learn contacts, load dedup state."""
+        if self._initialized:
+            return
+
+        print("[EmailScanner] 🔧 Initializing intelligence pipeline...")
+
+        # Load founder profile
+        profile = await self._store.get_founder(self._founder_id)
+        if profile:
+            self._scoring._founder_email = profile.email
+            self._ai_classifier._founder_context = (
+                f"Company: {profile.company_name}. "
+                f"Context: {profile.company_context}. "
+                f"Founder: {profile.name} ({profile.email})"
+            )
+
+        # Load existing relationships into contact database
+        try:
+            relationships = await self._store.get_all_relationships(self._founder_id)
+            for rel in relationships:
+                tier = 1 if rel.health_score >= 0.8 else (2 if rel.health_score >= 0.5 else 3)
+                self._contacts.add_contact(rel.contact_email, tier, rel.name)
+            print(f"[EmailScanner] Loaded {len(relationships)} contacts from CRM")
+        except Exception as e:
+            print(f"[EmailScanner] ⚠️ Failed to load relationships: {e}")
+
+        # Load contact config from Firestore (if saved)
+        try:
+            db = self._store._db
+            doc = await asyncio.to_thread(
+                lambda: db.collection("email_config").document(self._founder_id).get()
+            )
+            if doc.exists:
+                self._contacts.load_from_config(doc.to_dict())
+                print("[EmailScanner] Loaded contact config from Firestore")
+        except Exception as e:
+            print(f"[EmailScanner] ⚠️ Contact config load failed: {e}")
+
+        # Learn from sent items (who does the founder communicate with?)
+        try:
+            sent = await self._gmail.get_sent_emails(hours_back=720, max_results=100)
+            self._scoring.learn_from_sent_items(sent)
+            print(f"[EmailScanner] Learned from {len(sent)} sent emails "
+                  f"({len(self._scoring._founder_replied_threads)} threads, "
+                  f"{len(self._scoring._founder_replied_contacts)} contacts)")
+        except Exception as e:
+            print(f"[EmailScanner] ⚠️ Sent mail learning failed: {e}")
+
+        # Load dedup state
+        await self._dedup.load()
+
+        self._initialized = True
+        print("[EmailScanner] ✅ Intelligence pipeline initialized")
 
     # ── Main loop ─────────────────────────────────────────────────────────
 
     async def _scan_loop(self) -> None:
-        """Run scan every interval. First scan covers last 24h; subsequent scans cover 1h."""
+        """Run scan every interval. First scan covers full mailbox history (~10 years)."""
         first_run = True
         while self._running:
             try:
-                hours = 24 if first_run else 1
-                n = await self._scan(hours_back=hours)
-                print(f"[EmailScanner] ✅ Scan complete — {n} insights extracted")
-                first_run = False
+                if self._scan_lock.locked():
+                    print("[EmailScanner] ⏳ Scan already running (manual trigger?) — waiting for next interval")
+                    await asyncio.sleep(self._interval)
+                    continue
+
+                async with self._scan_lock:
+                    # First run: sweep entire mailbox history (87600h ≈ 10 years)
+                    # Subsequent runs: last 6 hours to catch new arrivals
+                    hours = 87600 if first_run else 6
+                    max_emails = 5000 if first_run else 200
+                    result = await self._scan(hours_back=hours, max_fetch=max_emails)
+                    print(f"[EmailScanner] ✅ Scan complete — {result.get('emails_scored', 0)} scored, "
+                          f"{result.get('insights_extracted', 0)} insights")
+                    first_run = False
             except Exception as e:
+                should_alert = self._health.record_failure(str(e))
                 print(f"[EmailScanner] ❌ Scan failed: {e}")
+                if should_alert:
+                    await self._create_scanner_alert(str(e))
             await asyncio.sleep(self._interval)
 
-    async def _scan(self, hours_back: int = 1) -> int:
-        """Core scan: fetch emails → extract insights → embed → store."""
+    async def _scan(self, hours_back: int = 1, max_fetch: int = 200) -> dict:
+        """
+        Full intelligence scan with INCREMENTAL BATCH PROCESSING.
+
+        Instead of fetching all emails then processing all at once, this:
+          1. Fetches all email IDs from Gmail (fast — just message refs)
+          2. Processes emails in batches of BATCH_SIZE
+          3. Each batch: fetch details → score → save to Firestore → UI updates live
+          4. Skips already-processed emails via dedup
+
+        This means the UI sees new emails appearing progressively during a large scan.
+        """
+        BATCH_SIZE = 100  # Process 100 emails at a time for progressive UI updates
+
+        await self._initialize()
+
+        # 1. Fetch emails — paginated, fetches all matching emails
         emails = await self._gmail.get_recent_emails(
-            hours_back=hours_back, max_results=50
+            hours_back=hours_back, max_results=max_fetch, exclude_promotions=False
         )
         if not emails:
-            return 0
+            self._health.record_success(0)
+            return {"emails_fetched": 0, "emails_scored": 0, "insights_extracted": 0}
 
-        print(f"[EmailScanner] 📧 Scanning {len(emails)} emails...")
+        total_fetched = len(emails)
+        print(f"[EmailScanner] 📧 Fetched {total_fetched} emails, processing in batches of {BATCH_SIZE}...")
 
-        # Fetch founder profile for context
-        profile = await self._store.get_founder(self._founder_id)
-        company_context = profile.company_context if profile else ""
-        my_email = profile.email if profile else ""
-
+        # 2. Process in batches — each batch gets scored and saved immediately
+        total_scored = 0
         total_insights = 0
-        for email in emails:
+        priority_counts = {"critical": 0, "urgent": 0, "important": 0, "notable": 0, "low": 0, "noise": 0}
+
+        for batch_idx in range(0, total_fetched, BATCH_SIZE):
+            batch = emails[batch_idx:batch_idx + BATCH_SIZE]
+            batch_num = batch_idx // BATCH_SIZE + 1
+            total_batches = (total_fetched + BATCH_SIZE - 1) // BATCH_SIZE
+
+            print(f"[EmailScanner] 📦 Batch {batch_num}/{total_batches} — {len(batch)} emails...")
+
+            # 2a. Fetch enrichment data for THIS batch only (not all 5000)
+            batch_thread_ids = list({e.thread_id for e in batch if e.thread_id})
+            batch_message_ids = [e.message_id for e in batch]
+
             try:
-                insights = await self._extract_insights(email, company_context, my_email)
-                if insights:
-                    # Embed all insights concurrently
-                    texts = [i.content + " " + i.raw_context[:300] for i in insights]
-                    embeddings = await self._embeddings.embed_batch(texts)
-
-                    for insight, embedding in zip(insights, embeddings):
-                        insight.embedding = embedding
-                        await self._store.add_insight(insight)
-
-                    total_insights += len(insights)
-
-                    # Update relationship health for the sender
-                    await self._update_relationship(email, insights)
-
+                thread_meta, msg_meta = await asyncio.gather(
+                    self._gmail.get_thread_metadata(batch_thread_ids),
+                    self._gmail.get_message_metadata(batch_message_ids),
+                )
             except Exception as e:
-                print(f"[EmailScanner] ⚠️  Error processing email {email.message_id}: {e}")
+                print(f"[EmailScanner] ⚠️ Metadata fetch failed for batch {batch_num}: {e}")
+                thread_meta, msg_meta = {}, {}
 
-        return total_insights
+            thread_depths = {tid: meta.get("depth", 1) for tid, meta in thread_meta.items()}
+            attachment_map = {mid: meta.get("has_attachment", False) for mid, meta in msg_meta.items()}
+            cc_map = {mid: meta.get("cc_emails", []) for mid, meta in msg_meta.items()}
+            importance_map = {mid: meta.get("importance", False) for mid, meta in msg_meta.items()}
 
-    async def _extract_insights(self, email, company_context: str, my_email: str) -> list[Insight]:
+            # 2b. Score + classify + save to Firestore (UI sees these immediately)
+            try:
+                scored_batch = await self._pipeline.process_emails(
+                    batch,
+                    thread_depths=thread_depths,
+                    attachment_map=attachment_map,
+                    cc_map=cc_map,
+                    importance_map=importance_map,
+                )
+            except Exception as e:
+                print(f"[EmailScanner] ⚠️ Pipeline failed for batch {batch_num}: {e}")
+                scored_batch = []
+
+            total_scored += len(scored_batch)
+
+            # Count priorities
+            for s in scored_batch:
+                pname = s.priority.value if hasattr(s.priority, 'value') else str(s.priority)
+                if pname in priority_counts:
+                    priority_counts[pname] += 1
+
+            # 2c. Extract insights from important emails in this batch
+            for scored in scored_batch:
+                if scored.priority in (EmailPriority.NOISE, EmailPriority.LOW):
+                    continue
+                try:
+                    original = next((e for e in batch if e.message_id == scored.message_id), None)
+                    if original:
+                        insights = await self._extract_insights(original)
+                        if insights:
+                            texts = [i.content + " " + i.raw_context[:300] for i in insights]
+                            embeddings = await self._embeddings.embed_batch(texts)
+                            for insight, embedding in zip(insights, embeddings):
+                                insight.embedding = embedding
+                                await self._store.add_insight(insight)
+                            total_insights += len(insights)
+                            await self._update_relationship(original, insights)
+                except Exception as e:
+                    print(f"[EmailScanner] ⚠️ Insight extraction failed: {e}")
+
+            print(f"[EmailScanner] ✅ Batch {batch_num}/{total_batches} done — "
+                  f"{len(scored_batch)} scored ({total_scored} total so far)")
+
+        # 3. Save contact config for persistence
+        await self._save_contact_config()
+
+        print(f"[EmailScanner] 🏁 Full scan complete — {total_fetched} fetched, {total_scored} scored, {total_insights} insights")
+        return {
+            "emails_fetched": total_fetched,
+            "emails_scored": total_scored,
+            "insights_extracted": total_insights,
+            "by_priority": priority_counts,
+        }
+
+    async def _save_contact_config(self) -> None:
+        """Persist contact database config to Firestore."""
+        try:
+            db = self._store._db
+            config = self._contacts.to_config()
+            await asyncio.to_thread(
+                lambda: db.collection("email_config").document(self._founder_id).set(config)
+            )
+        except Exception as e:
+            print(f"[EmailScanner] ⚠️ Contact config save failed: {e}")
+
+    async def _create_scanner_alert(self, error: str) -> None:
+        """Create a CRITICAL alert when scanner fails repeatedly."""
+        alert = Alert(
+            founder_id=self._founder_id,
+            title="Email Scanner Down",
+            message=f"Email scanning has failed {self._health._consecutive_failures} times. "
+                    f"Last error: {error[:200]}. Emails may be missed.",
+            severity=AlertSeverity.CRITICAL,
+        )
+        await self._store.add_alert(alert)
+
+    async def _extract_insights(self, email, company_context: str = "") -> list[Insight]:
         """Use Gemini to extract structured insights from a single email."""
+        if not company_context:
+            profile = await self._store.get_founder(self._founder_id)
+            company_context = profile.company_context if profile else ""
+
         prompt = f"""You are an AI assistant helping a founder track their business commitments, risks, and relationships.
 
 Company context: {company_context or "A startup/SMB"}
@@ -187,12 +414,12 @@ Extract insights in this EXACT JSON format (array of objects):
 ]
 
 Types:
-- commitment: A promise or obligation made by the founder (e.g. "I will send the report by Friday")
-- risk: A potential threat to the business or relationship (e.g. customer sounds frustrated)
+- commitment: A promise or obligation made (e.g. "I will send the report by Friday")
+- risk: A potential threat to the business or relationship
 - decision: An agreed-upon course of action
-- action_item: A task assigned to someone on the team
+- action_item: A task assigned to someone
 - opportunity: A business opportunity mentioned
-- relationship: A significant relationship signal (introductions, praise, complaints)
+- relationship: A significant relationship signal
 
 Only extract genuinely important business signals. If none, return [].
 Respond ONLY with the JSON array."""
@@ -202,7 +429,6 @@ Respond ONLY with the JSON array."""
             return []
 
         try:
-            # Strip markdown code fences if present
             clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
             data = json.loads(clean)
             if not isinstance(data, list):
@@ -216,21 +442,19 @@ Respond ONLY with the JSON array."""
                 itype = InsightType(item.get("type", ""))
             except ValueError:
                 continue
-
             insight = Insight(
-                founder_id  = self._founder_id,
-                type        = itype,
-                source      = InsightSource.EMAIL,
-                content     = item.get("content", ""),
-                raw_context = f"From: {email.sender}\nSubject: {email.subject}\n{email.body[:500]}",
-                parties     = item.get("parties", [email.sender_email]),
-                due_date    = item.get("due_date"),
-                source_ref  = email.message_id,
-                metadata    = item.get("metadata", {}),
+                founder_id=self._founder_id,
+                type=itype,
+                source=InsightSource.EMAIL,
+                content=item.get("content", ""),
+                raw_context=f"From: {email.sender}\nSubject: {email.subject}\n{email.body[:500]}",
+                parties=item.get("parties", [email.sender_email]),
+                due_date=item.get("due_date"),
+                source_ref=email.message_id,
+                metadata=item.get("metadata", {}),
             )
             if insight.content:
                 insights.append(insight)
-
         return insights
 
     async def _update_relationship(self, email, insights: list[Insight]) -> None:
@@ -242,32 +466,30 @@ Respond ONLY with the JSON array."""
         profile = await self._store.get_relationship(self._founder_id, contact_email)
         if not profile:
             profile = RelationshipProfile(
-                founder_id    = self._founder_id,
-                contact_email = contact_email,
-                name          = email.sender.split("<")[0].strip(),
+                founder_id=self._founder_id,
+                contact_email=contact_email,
+                name=email.sender.split("<")[0].strip(),
             )
 
-        # Update interaction stats
         profile.interaction_count += 1
         profile.last_contact_at = email.timestamp
         profile.last_updated = time.time()
 
-        # Detect tone from risk/relationship insights
         risk_signals = [i for i in insights if i.type in (InsightType.RISK, InsightType.RELATIONSHIP)]
         if risk_signals:
             signal_texts = "; ".join(i.content for i in risk_signals[:3])
             profile.recent_signals.append(signal_texts)
-
-            # Simple heuristic: if we extracted a risk insight, health nudges down
             profile.health_score = max(0.0, profile.health_score - 0.05 * len(risk_signals))
-            profile.tone_trend   = ToneTrend.DECLINING if profile.health_score < 0.5 else profile.tone_trend
+            profile.tone_trend = ToneTrend.DECLINING if profile.health_score < 0.5 else profile.tone_trend
         else:
-            # Positive interaction nudges health up slightly
             profile.health_score = min(1.0, profile.health_score + 0.02)
 
-        # Count open commitments to this contact
         commitments = [i for i in insights if i.type == InsightType.COMMITMENT and contact_email in i.parties]
         profile.open_commitments += len(commitments)
+
+        # Auto-learn this contact into the intelligence database
+        tier = 1 if profile.health_score >= 0.8 else (2 if profile.health_score >= 0.5 else 3)
+        self._contacts.add_contact(contact_email, tier, profile.name)
 
         await self._store.save_relationship(profile)
 
@@ -364,7 +586,6 @@ class RiskMonitorAgent:
         """Run all checks and generate alerts. Returns number of new alerts."""
         alerts_created = 0
 
-        # Run all checks concurrently
         results = await asyncio.gather(
             self._check_overdue_commitments(),
             self._check_at_risk_relationships(),
@@ -449,7 +670,6 @@ class RiskMonitorAgent:
 
         created = 0
         for task in blocked:
-            # Only alert if blocked for more than 24h
             blocked_hours = (time.time() - task.updated_at) / 3600
             if blocked_hours < 24:
                 continue

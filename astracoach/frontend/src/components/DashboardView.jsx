@@ -146,6 +146,32 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
   const [memoryEvents, setMemoryEvents] = useState([])
   const [memoryStatus, setMemoryStatus] = useState(null)
   const [seeding, setSeeding] = useState(false)
+
+  // Email Intelligence state
+  const [scoredEmails, setScoredEmails] = useState([])
+  const [pipelineSummary, setPipelineSummary] = useState(null)
+  const [scannerHealth, setScannerHealth] = useState(null)
+  const [contactTiers, setContactTiers] = useState(null)
+  const [emailBriefing, setEmailBriefing] = useState(null)
+  const [scanning, setScanning] = useState(false)
+  const [emailDetailId, setEmailDetailId] = useState(null)
+  const [emailDetail, setEmailDetail] = useState(null)
+  const [emailIntelTab, setEmailIntelTab] = useState('splits')
+  const [emailPriorityFilter, setEmailPriorityFilter] = useState('')
+  const [emailStageFilter, setEmailStageFilter] = useState('')
+
+  // Split Inbox + RAG Search + Voice Draft state
+  const [splitData, setSplitData] = useState(null)
+  const [activeSplit, setActiveSplit] = useState('action_required')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState(null)
+  const [searching, setSearching] = useState(false)
+  const [draftResult, setDraftResult] = useState(null)
+  const [drafting, setDrafting] = useState(false)
+  const [selectedEmailIdx, setSelectedEmailIdx] = useState(0)
+  const [embedStats, setEmbedStats] = useState(null)
+  const [syncing, setSyncing] = useState(false)
+
   const timerRef = useRef(null)
 
   const { theme: T } = useTheme()
@@ -153,19 +179,24 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
 
   const fetchAll = useCallback(async () => {
     try {
-      const [sumRes, alertRes, relRes, insightRes, taskRes, teamRes, emailRes, ruleRes, factRes, episodeRes, eventRes, statusRes] = await Promise.all([
+      const [sumRes, alertRes, relRes, insightRes, taskRes, teamRes, emailRes, ruleRes, factRes, episodeRes, eventRes, statusRes, scoredRes, pipelineRes, healthRes, tierRes, briefingRes] = await Promise.all([
         fetch(`${backendUrl}/brain/summary`).then(r => r.ok ? r.json() : null).catch(() => null),
         fetch(`${backendUrl}/brain/alerts?severity=medium`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/relationships`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/insights?limit=10`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/tasks/all`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/teams`).then(r => r.ok ? r.json() : []).catch(() => []),
-        fetch(`${backendUrl}/brain/emails/routed?limit=50`).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch(`${backendUrl}/brain/emails/routed?limit=500`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/routing-rules`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/memory/facts`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/memory/episodes?limit=10`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/memory/events?limit=20`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/memory/status`).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch(`${backendUrl}/brain/emails/scored?limit=500`).then(r => r.ok ? r.json() : {emails:[]}).catch(() => ({emails:[]})),
+        fetch(`${backendUrl}/brain/emails/pipeline`).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch(`${backendUrl}/brain/emails/health`).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch(`${backendUrl}/brain/contacts/tiers`).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch(`${backendUrl}/brain/emails/briefing`).then(r => r.ok ? r.json() : null).catch(() => null),
       ])
       // Always use curated demo summary for polished presentation
       setSummary(DEMO_SUMMARY)
@@ -174,12 +205,17 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
       setInsights(useDemoFallback(insightRes, DEMO_INSIGHTS))
       setTasks(useDemoFallback(taskRes, DEMO_TASKS))
       setTeams(useDemoFallback(teamRes, DEMO_TEAMS))
-      setRoutedEmails(useDemoFallback(emailRes, DEMO_ROUTED_EMAILS))
-      setRoutingRules(useDemoFallback(ruleRes, DEMO_ROUTING_RULES))
+      setRoutedEmails(emailRes?.length ? emailRes : [])
+      setRoutingRules(ruleRes?.length ? ruleRes : [])
       setMemoryFacts(useDemoFallback(factRes, DEMO_MEMORY_FACTS))
       setMemoryEpisodes(useDemoFallback(episodeRes, DEMO_MEMORY_EPISODES))
       setMemoryEvents(useDemoFallback(eventRes, DEMO_MEMORY_EVENTS))
       setMemoryStatus(DEMO_MEMORY_STATUS)
+      setScoredEmails(scoredRes?.emails || [])
+      setPipelineSummary(pipelineRes)
+      setScannerHealth(healthRes)
+      setContactTiers(tierRes)
+      setEmailBriefing(briefingRes)
     } catch {
       // If backend is completely down, use all demo data
       setSummary(DEMO_SUMMARY)
@@ -194,6 +230,11 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
       setMemoryEpisodes(DEMO_MEMORY_EPISODES)
       setMemoryEvents(DEMO_MEMORY_EVENTS)
       setMemoryStatus(DEMO_MEMORY_STATUS)
+      setScoredEmails([])
+      setPipelineSummary(null)
+      setScannerHealth(null)
+      setContactTiers(null)
+      setEmailBriefing(null)
     }
     setLoading(false)
   }, [backendUrl])
@@ -284,6 +325,38 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
     `
     document.head.appendChild(style)
     return () => document.head.removeChild(style)
+  }, [])
+
+  // Inject email-view CSS keyframe animations (must be before conditional returns)
+  useEffect(() => {
+    const styleId = 'astra-email-animations'
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style')
+      style.id = styleId
+      style.textContent = `
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideInRight { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes slideInUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulseGlow { 0%, 100% { box-shadow: 0 0 4px rgba(6,182,212,0.2); } 50% { box-shadow: 0 0 12px rgba(6,182,212,0.4); } }
+        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        @keyframes breathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+        @keyframes barFill { from { width: 0%; } to { width: var(--bar-width); } }
+        .astra-email-row:hover { background: rgba(255,255,255,0.03) !important; }
+        .astra-split-btn:hover { background: rgba(255,255,255,0.05) !important; }
+        .astra-action-btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
+        .astra-search-input:focus { border-color: #06b6d4 !important; box-shadow: 0 0 20px rgba(6,182,212,0.15) !important; }
+        .astra-skeleton { background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.03) 75%); background-size: 200% 100%; animation: shimmer 1.5s ease-in-out infinite; }
+        .astra-scroll::-webkit-scrollbar { width: 6px; }
+        .astra-scroll::-webkit-scrollbar-track { background: transparent; }
+        .astra-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+        .astra-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+      `
+      document.head.appendChild(style)
+    }
+    return () => {
+      const el = document.getElementById(styleId)
+      if (el) el.remove()
+    }
   }, [])
 
   // ── Dashboard view ──────────────────────────────────────────────────────
@@ -477,175 +550,1183 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
     )
   }
 
-  // ── Email Routing view ──────────────────────────────────────────────────
+  // ── Email Intelligence view (Split Inbox + RAG Search + Detail Panel) ──
   if (activeView === 'email') {
-    const filteredEmails = routedEmails.filter(e => {
-      if (emailFilter.category && e.category !== emailFilter.category) return false
-      if (emailFilter.urgency && e.urgency !== emailFilter.urgency) return false
-      if (emailFilter.team && e.routed_to_team_name !== emailFilter.team) return false
-      if (emailFilter.status && e.status !== emailFilter.status) return false
+    const triggerScan = async () => {
+      setScanning(true)
+      try {
+        await fetch(`${backendUrl}/brain/emails/intelligence-scan`, { method: 'POST' })
+        // Also fetch splits
+        const splitRes = await fetch(`${backendUrl}/brain/emails/splits`)
+        if (splitRes.ok) setSplitData(await splitRes.json())
+        await fetchAll()
+      } catch (e) { console.error('Scan failed:', e) }
+      setScanning(false)
+    }
+
+    const moveStage = async (emailId, newStage) => {
+      try {
+        await fetch(`${backendUrl}/brain/emails/${emailId}/stage`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stage: newStage })
+        })
+        await fetchAll()
+      } catch (e) { console.error('Stage update failed:', e) }
+    }
+
+    const loadDetail = async (emailId) => {
+      if (emailDetailId === emailId) { setEmailDetailId(null); setEmailDetail(null); return }
+      setEmailDetailId(emailId)
+      try {
+        const res = await fetch(`${backendUrl}/brain/emails/${emailId}/detail`)
+        setEmailDetail(await res.json())
+      } catch { setEmailDetail(null) }
+    }
+
+    const handleSearch = async () => {
+      if (!searchQuery.trim()) return
+      setSearching(true)
+      try {
+        const res = await fetch(`${backendUrl}/brain/emails/search`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: searchQuery, include_sent: true })
+        })
+        setSearchResults(await res.json())
+      } catch (e) { console.error('Search failed:', e) }
+      setSearching(false)
+    }
+
+    const handleDraft = async (email) => {
+      setDrafting(true)
+      try {
+        const res = await fetch(`${backendUrl}/brain/emails/draft`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipient_email: email.sender_email,
+            recipient_name: email.sender,
+            thread_subject: email.subject,
+            thread_body: email.snippet || '',
+            instruction: '',
+          })
+        })
+        setDraftResult(await res.json())
+      } catch (e) { console.error('Draft failed:', e) }
+      setDrafting(false)
+    }
+
+    const handleEmbedSync = async () => {
+      setSyncing(true)
+      try {
+        const res = await fetch(`${backendUrl}/brain/emails/embed-sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hours_back: 720 })
+        })
+        const stats = await res.json()
+        setEmbedStats(stats)
+      } catch (e) { console.error('Sync failed:', e) }
+      setSyncing(false)
+    }
+
+    const fetchSplits = async () => {
+      try {
+        const res = await fetch(`${backendUrl}/brain/emails/splits`)
+        if (res.ok) setSplitData(await res.json())
+      } catch {}
+    }
+
+    // Load splits on mount if not loaded
+    if (!splitData && scoredEmails.length > 0) fetchSplits()
+
+    const priorityColor = (p) => {
+      if (p === 'critical') return T.danger
+      if (p === 'urgent') return T.warning
+      if (p === 'important') return '#3b82f6'
+      if (p === 'notable') return T.accentCyan
+      if (p === 'low') return T.textMuted
+      return 'rgba(107,114,128,0.5)'
+    }
+    const priorityBg = (p) => `${priorityColor(p)}15`
+
+    // Split tab config
+    const splitTabs = [
+      { id: 'action_required', label: 'Action', color: T.danger, icon: '!' },
+      { id: 'vip', label: 'VIP', color: '#3b82f6', icon: '\u2605' },
+      { id: 'team', label: 'Team', color: T.accentPurple, icon: '\u2302' },
+      { id: 'updates', label: 'Updates', color: T.textMuted, icon: '\u2709' },
+      { id: 'newsletters', label: 'News', color: 'rgba(107,114,128,0.6)', icon: '\u2611' },
+      { id: 'other', label: 'Other', color: T.textDim, icon: '\u2026' },
+      { id: 'done', label: 'Done', color: T.success, icon: '\u2713' },
+    ]
+
+    const currentSplitEmails = splitData?.splits?.[activeSplit] || []
+    const splitCounts = splitData?.counts || {}
+
+    const filteredScored = scoredEmails.filter(e => {
+      if (emailPriorityFilter && e.priority !== emailPriorityFilter) return false
+      if (emailStageFilter && e.pipeline_stage !== emailStageFilter) return false
       return true
     })
 
-    const statsByCategory = routedEmails.reduce((acc, e) => {
-      acc[e.category || 'uncategorized'] = (acc[e.category || 'uncategorized'] || 0) + 1
-      return acc
-    }, {})
+    // Helper: Format relative time
+    const relativeTime = (dateStr) => {
+      if (!dateStr) return ''
+      const d = new Date(dateStr)
+      const now = new Date()
+      const diff = now - d
+      const mins = Math.floor(diff / 60000)
+      const hrs = Math.floor(diff / 3600000)
+      const days = Math.floor(diff / 86400000)
+      if (mins < 1) return 'Just now'
+      if (mins < 60) return `${mins}m`
+      if (hrs < 24) return `${hrs}h`
+      if (days < 2) return 'Yesterday'
+      if (days < 7) return `${days}d`
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    }
 
     return (
-      <div style={S.dashRoot}>
-        <div style={S.dashHeader}>
-          <div>
-            <h1 style={S.dashTitle}>Email Routing</h1>
-            <span style={S.dashSub}>AI-powered inbox intelligence</span>
+      <div style={{
+        display: 'flex', flexDirection: 'column', height: '100%',
+        background: T.bg, overflow: 'hidden',
+      }}>
+        {/* ═══ HEADER ═══ */}
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '16px 24px', flexShrink: 0,
+          borderBottom: `1px solid ${T.border}`,
+          background: T.bgElevated,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+            <h1 style={{
+              fontSize: 20, fontWeight: 800, margin: 0,
+              background: T.gradientPrimary,
+              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text', letterSpacing: '-0.02em',
+            }}>
+              Email Intelligence
+            </h1>
+            <span style={{ fontSize: 11, color: T.textDim, fontWeight: 500 }}>
+              Split Inbox · RAG Search · Voice Drafts
+            </span>
           </div>
-          <div style={S.emailStats}>
-            <div style={S.statCard}>
-              <span style={S.statValue}>{routedEmails.length}</span>
-              <span style={S.statLabel}>Routed</span>
-            </div>
-            <div style={S.statCard}>
-              <span style={S.statValue}>{Object.keys(statsByCategory).length}</span>
-              <span style={S.statLabel}>Categories</span>
-            </div>
-            <div style={S.statCard}>
-              <span style={S.statValue}>{teams.length}</span>
-              <span style={S.statLabel}>Teams</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Tabs */}
-        <div style={S.emailTabBar}>
-          <button
-            style={{
-              ...S.emailTab,
-              ...(emailTab === 'inbox' && S.emailTabActive),
-            }}
-            onClick={() => setEmailTab('inbox')}
-          >
-            Inbox ({filteredEmails.length})
-          </button>
-          <button
-            style={{
-              ...S.emailTab,
-              ...(emailTab === 'rules' && S.emailTabActive),
-            }}
-            onClick={() => setEmailTab('rules')}
-          >
-            Routing Rules ({routingRules.length})
-          </button>
-        </div>
-
-        {emailTab === 'inbox' ? (
-          <>
-            {/* Filters */}
-            <div style={S.emailFilterBar}>
-              <select
-                style={S.filterSelect}
-                value={emailFilter.category}
-                onChange={(e) => setEmailFilter({ ...emailFilter, category: e.target.value })}
-              >
-                <option value="">All Categories</option>
-                {Object.keys(statsByCategory).map(cat => (
-                  <option key={cat} value={cat}>{cat}</option>
-                ))}
-              </select>
-              <select
-                style={S.filterSelect}
-                value={emailFilter.urgency}
-                onChange={(e) => setEmailFilter({ ...emailFilter, urgency: e.target.value })}
-              >
-                <option value="">All Urgencies</option>
-                <option value="critical">Critical</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-              </select>
-              <select
-                style={S.filterSelect}
-                value={emailFilter.team}
-                onChange={(e) => setEmailFilter({ ...emailFilter, team: e.target.value })}
-              >
-                <option value="">All Teams</option>
-                {teams.map(t => (
-                  <option key={t.id} value={t.name}>{t.name}</option>
-                ))}
-              </select>
-              <select
-                style={S.filterSelect}
-                value={emailFilter.status}
-                onChange={(e) => setEmailFilter({ ...emailFilter, status: e.target.value })}
-              >
-                <option value="">All Status</option>
-                <option value="new">New</option>
-                <option value="assigned">Assigned</option>
-                <option value="in_progress">In Progress</option>
-                <option value="resolved">Resolved</option>
-              </select>
-            </div>
-
-            {/* Email list */}
-            <div style={S.emailList}>
-              {filteredEmails.length === 0 ? (
-                <div style={S.emptyState}>
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.3, marginBottom: 8 }}>
-                    <rect x="2" y="4" width="20" height="16" rx="2"/>
-                    <path d="m22 7-10 5L2 7"/>
-                  </svg>
-                  <div>No emails match current filters</div>
-                  <div style={S.voiceHint}>Try saying "Check my emails" to scan your inbox</div>
-                </div>
-              ) : (
-                filteredEmails.map((email) => (
-                  <EmailRow
-                    key={email.id}
-                    email={email}
-                    isExpanded={expandedEmail === email.id}
-                    onToggle={() => setExpandedEmail(expandedEmail === email.id ? null : email.id)}
-                  />
-                ))
-              )}
-            </div>
-          </>
-        ) : (
-          <>
-            {/* Routing Rules */}
-            <button
-              style={S.createRuleBtn}
-              onClick={() => setShowCreateRule(!showCreateRule)}
-            >
-              <span style={{ fontSize: 18, marginRight: 8 }}>+</span> Create Rule
-            </button>
-
-            {showCreateRule && (
-              <CreateRuleForm
-                teams={teams}
-                onClose={() => setShowCreateRule(false)}
-                backendUrl={backendUrl}
-                onCreated={fetchAll}
-              />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {scannerHealth && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px',
+                borderRadius: 8, background: T.bgCard, border: `1px solid ${T.border}`,
+                fontSize: 10, color: T.textSecondary, fontWeight: 500,
+              }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: scannerHealth.status === 'healthy' ? T.success : T.warning,
+                  animation: 'breathe 2s ease-in-out infinite',
+                }} />
+                {scannerHealth.status || 'unknown'}
+              </div>
             )}
+            {embedStats && (
+              <div style={{
+                fontSize: 10, color: T.textMuted, padding: '6px 12px', borderRadius: 8,
+                background: T.bgCard, border: `1px solid ${T.border}`, fontWeight: 500,
+                fontVariantNumeric: 'tabular-nums',
+              }}>
+                {(embedStats.indexed || 0).toLocaleString()} indexed
+              </div>
+            )}
+            <button
+              onClick={handleEmbedSync}
+              disabled={syncing}
+              className="astra-action-btn"
+              style={{
+                padding: '6px 14px', borderRadius: 8, cursor: 'pointer',
+                background: 'rgba(139,92,246,0.12)', color: T.accentPurple,
+                border: `1px solid rgba(139,92,246,0.25)`, fontSize: 11, fontWeight: 600,
+                transition: 'all 0.2s', opacity: syncing ? 0.5 : 1,
+              }}
+            >
+              {syncing ? 'Syncing...' : 'Sync Memory'}
+            </button>
+            <button
+              onClick={triggerScan}
+              disabled={scanning}
+              className="astra-action-btn"
+              style={{
+                padding: '6px 14px', borderRadius: 8, cursor: 'pointer',
+                background: `linear-gradient(135deg, ${T.accentCyan}, ${T.accentPurple})`,
+                color: '#fff', border: 'none', fontSize: 11, fontWeight: 700,
+                transition: 'all 0.2s', opacity: scanning ? 0.5 : 1,
+                boxShadow: scanning ? 'none' : T.shadowGlow,
+              }}
+            >
+              {scanning ? 'Scanning...' : 'Scan Inbox'}
+            </button>
+          </div>
+        </div>
 
-            <div style={S.rulesList}>
-              {routingRules.length === 0 ? (
-                <div style={S.emptyState}>
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.3, marginBottom: 8 }}>
-                    <path d="M12 20h9"/>
-                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-                  </svg>
-                  <div>No routing rules yet</div>
+        {/* ═══ SEARCH BAR — Command palette style ═══ */}
+        <div style={{
+          padding: '14px 24px', flexShrink: 0,
+          borderBottom: `1px solid ${T.border}`,
+          background: T.bgElevated,
+        }}>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.textMuted} strokeWidth="2" style={{
+                position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none',
+              }}>
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+              </svg>
+              <input
+                type="text"
+                className="astra-search-input"
+                placeholder="Search or ask anything... ⌘K"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                style={{
+                  width: '100%', padding: '11px 16px 11px 40px', borderRadius: 10,
+                  background: T.bgInput, border: `1px solid ${T.border}`,
+                  color: T.text, fontSize: 12, outline: 'none',
+                  transition: 'all 0.25s ease',
+                  boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.1)',
+                }}
+              />
+              <span style={{
+                position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                fontSize: 8, fontWeight: 700, color: T.textDim, pointerEvents: 'none',
+                background: T.bgSurface, padding: '2px 6px', borderRadius: 4,
+              }}>
+                AI
+              </span>
+            </div>
+            <button
+              onClick={handleSearch}
+              disabled={searching}
+              className="astra-action-btn"
+              style={{
+                padding: '11px 20px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                background: `linear-gradient(135deg, ${T.accentCyan}, ${T.accentPurple})`,
+                color: '#fff', fontSize: 12, fontWeight: 700,
+                opacity: searching ? 0.6 : 1, transition: 'all 0.2s',
+                boxShadow: `0 2px 8px ${T.accentCyan}20`,
+              }}
+            >
+              {searching ? '⏳' : '🔍'}
+            </button>
+          </div>
+          {/* Search Results */}
+          {searchResults && (
+            <div style={{
+              marginTop: 10, padding: 14, borderRadius: 10,
+              background: T.bgCard, border: `1px solid ${T.borderAccent}`,
+              animation: 'slideInUp 0.25s ease',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: T.accentCyan, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {searchResults.results?.length || 0} results
+                </span>
+                <button
+                  onClick={() => setSearchResults(null)}
+                  style={{ background: 'none', border: 'none', color: T.textMuted, cursor: 'pointer', fontSize: 14, padding: '0 4px', lineHeight: 1 }}
+                >
+                  x
+                </button>
+              </div>
+              {searchResults.answer && (
+                <div style={{
+                  fontSize: 12, color: T.text, lineHeight: 1.65, marginBottom: 10,
+                  padding: '10px 12px', borderRadius: 8, background: T.bgSurface,
+                  borderLeft: `3px solid ${T.accentCyan}`, fontWeight: 500,
+                }}>
+                  {searchResults.answer}
+                </div>
+              )}
+              {(searchResults.results || []).slice(0, 5).map((r, i) => (
+                <div key={i} style={{
+                  padding: '8px 10px', marginBottom: 4, borderRadius: 6,
+                  background: T.bgSurface, fontSize: 11, display: 'flex', gap: 8,
+                  animation: `slideInUp ${0.2 + i * 0.05}s ease`,
+                }}>
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, color: T.accentCyan,
+                    background: 'rgba(6,182,212,0.1)', padding: '2px 6px', borderRadius: 4,
+                    flexShrink: 0, alignSelf: 'flex-start',
+                  }}>
+                    {((r.relevance_score || 0) * 100).toFixed(0)}%
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: T.text, marginBottom: 1 }}>
+                      {r.sender || 'Unknown'} — {r.subject || 'No subject'}
+                    </div>
+                    <div style={{ fontSize: 10, color: T.textMuted, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {(r.chunk_text || '').slice(0, 200)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ═══ TAB BAR — Animated underline ═══ */}
+        <div style={{
+          display: 'flex', gap: 0, padding: '0 24px', flexShrink: 0,
+          borderBottom: `1px solid ${T.border}`, background: T.bgElevated,
+          position: 'relative',
+        }}>
+          {[
+            { id: 'splits', label: 'Split Inbox', count: scoredEmails.length },
+            { id: 'pipeline', label: 'Pipeline', count: pipelineSummary?.total || 0 },
+            { id: 'contacts', label: 'Contacts', count: contactTiers ? Object.keys(contactTiers.tier_1 || {}).length + Object.keys(contactTiers.tier_2 || {}).length : 0 },
+            { id: 'briefing', label: 'Briefing', count: emailBriefing?.action_items?.length || 0 },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setEmailIntelTab(tab.id)}
+              style={{
+                padding: '14px 16px', background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: 12, fontWeight: emailIntelTab === tab.id ? 700 : 500,
+                color: emailIntelTab === tab.id ? T.text : T.textMuted,
+                transition: 'all 0.25s', display: 'flex', alignItems: 'center', gap: 6,
+                position: 'relative',
+                borderBottom: `3px solid ${emailIntelTab === tab.id ? T.accentCyan : 'transparent'}`,
+              }}
+            >
+              {tab.label}
+              {tab.count > 0 && (
+                <span style={{
+                  fontSize: 8, fontWeight: 800, padding: '2px 6px', borderRadius: 6,
+                  background: emailIntelTab === tab.id ? `${T.accentCyan}20` : T.bgSurface,
+                  color: emailIntelTab === tab.id ? T.accentCyan : T.textDim,
+                  fontVariantNumeric: 'tabular-nums',
+                  lineHeight: '12px',
+                }}>
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* ═══ CONTENT ═══ */}
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {/* ── SPLITS TAB ── */}
+          {emailIntelTab === 'splits' && (
+            <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+
+              {/* LEFT: SPLIT RAIL — Full rounded highlight + wider */}
+              <div style={{
+                flex: '0 0 160px', display: 'flex', flexDirection: 'column',
+                borderRight: `1px solid ${T.border}`, background: T.bgPanel,
+                padding: '10px 8px',
+              }}>
+                {splitTabs.map((st, i) => {
+                  const isActive = activeSplit === st.id
+                  const count = splitCounts[st.id] || 0
+                  return (
+                    <button
+                      key={st.id}
+                      onClick={() => { setActiveSplit(st.id); setSelectedEmailIdx(0); setDraftResult(null) }}
+                      className="astra-split-btn"
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 9,
+                        padding: '10px 12px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                        fontSize: 12, fontWeight: isActive ? 700 : 500,
+                        background: isActive ? `${st.color}20` : 'transparent',
+                        color: isActive ? st.color : T.textMuted,
+                        transition: 'all 0.15s ease',
+                        animation: `slideInUp ${0.1 + i * 0.03}s ease`,
+                        marginBottom: 4,
+                      }}
+                    >
+                      <span style={{ fontSize: 14, lineHeight: 1, width: 16, textAlign: 'center' }}>{st.icon}</span>
+                      <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
+                        {st.label}
+                      </span>
+                      {count > 0 && (
+                        <span style={{
+                          fontSize: 8, fontWeight: 800, minWidth: 20, textAlign: 'center',
+                          background: isActive ? st.color : T.bgSurface,
+                          color: isActive ? '#000' : T.textDim,
+                          padding: '2px 6px', borderRadius: 6, lineHeight: '14px',
+                          fontVariantNumeric: 'tabular-nums',
+                        }}>
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+
+                {/* Divider between primary and secondary splits */}
+                <div style={{
+                  height: 1, background: T.border, margin: '8px 0',
+                }} />
+
+                {/* Filter dropdown at bottom of rail */}
+                <div style={{ marginTop: 'auto', padding: '8px 0' }}>
+                  <select
+                    value={emailPriorityFilter}
+                    onChange={(e) => setEmailPriorityFilter(e.target.value)}
+                    style={{
+                      width: '100%', padding: '8px 10px', borderRadius: 8,
+                      background: T.bgInput, border: `1px solid ${T.border}`,
+                      color: T.textSecondary, fontSize: 10, outline: 'none', cursor: 'pointer',
+                      fontWeight: 500,
+                    }}
+                  >
+                    <option value="">All priorities</option>
+                    <option value="critical">Critical</option>
+                    <option value="urgent">Urgent</option>
+                    <option value="important">Important</option>
+                    <option value="notable">Notable</option>
+                    <option value="low">Low</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* CENTER: EMAIL LIST — Superhuman-inspired redesign */}
+              <div style={{
+                flex: '0 0 400px', display: 'flex', flexDirection: 'column',
+                borderRight: `1px solid ${T.border}`, background: T.bgCard,
+                minHeight: 0,
+              }}>
+                {(() => {
+                  const emails = currentSplitEmails.length > 0 ? currentSplitEmails : filteredScored
+                  if (emails.length === 0) {
+                    return (
+                      <div style={{
+                        flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+                        justifyContent: 'center', padding: 40, textAlign: 'center',
+                      }}>
+                        {scanning ? (
+                          <>
+                            <div className="astra-skeleton" style={{ width: 48, height: 48, borderRadius: 12, marginBottom: 16 }} />
+                            <div className="astra-skeleton" style={{ width: 160, height: 12, borderRadius: 6, marginBottom: 8 }} />
+                            <div className="astra-skeleton" style={{ width: 120, height: 10, borderRadius: 6 }} />
+                          </>
+                        ) : (
+                          <>
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke={T.textDim} strokeWidth="1.5" style={{ marginBottom: 12, opacity: 0.3 }}>
+                              <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/>
+                            </svg>
+                            <div style={{ fontSize: 13, color: T.textMuted, fontWeight: 600, marginBottom: 4 }}>
+                              No emails here yet
+                            </div>
+                            <div style={{ fontSize: 11, color: T.textDim }}>
+                              Click "Scan Inbox" to score and categorize your emails
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )
+                  }
+                  return (
+                    <>
+                      <div className="astra-scroll" style={{ flex: 1, overflowY: 'auto' }}>
+                        {emails.map((email, idx) => {
+                          const isSelected = selectedEmailIdx === idx
+                          const senderInitial = ((email.sender || email.sender_email || '?')[0] || '?').toUpperCase()
+                          const isUnread = !email.is_read
+                          return (
+                            <div
+                              key={email.message_id || idx}
+                              onClick={() => { setSelectedEmailIdx(idx); loadDetail(email.message_id); setDraftResult(null) }}
+                              className={isSelected ? '' : 'astra-email-row'}
+                              style={{
+                                padding: '12px 14px', cursor: 'pointer',
+                                borderBottom: `1px solid ${T.borderSubtle}`,
+                                background: isSelected ? `${T.accentCyan}0a` : 'transparent',
+                                borderLeft: `3px solid ${isSelected ? T.accentCyan : priorityColor(email.priority)}`,
+                                transition: 'all 0.15s ease',
+                              }}
+                            >
+                              {/* Top row: sender name + timestamp */}
+                              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 5 }}>
+                                <span style={{
+                                  fontSize: 13, fontWeight: isUnread ? 700 : 600, color: T.text,
+                                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+                                }}>
+                                  {email.sender || email.sender_email || 'Unknown'}
+                                </span>
+                                {isUnread && (
+                                  <span style={{
+                                    width: 6, height: 6, borderRadius: '50%', background: T.accentCyan,
+                                    flexShrink: 0, marginLeft: 6, marginRight: 6,
+                                    boxShadow: `0 0 4px ${T.accentCyan}`,
+                                  }} />
+                                )}
+                                <span style={{
+                                  fontSize: 11, color: T.textMuted, fontWeight: 500,
+                                  flexShrink: 0, marginLeft: 6,
+                                  fontVariantNumeric: 'tabular-nums',
+                                }}>
+                                  {relativeTime(email.date)}
+                                </span>
+                              </div>
+
+                              {/* Subject line */}
+                              <div style={{
+                                fontSize: 12, fontWeight: 500, color: T.text,
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                marginBottom: 4,
+                              }}>
+                                {email.subject || '(no subject)'}
+                              </div>
+
+                              {/* AI snippet (1 line max) */}
+                              {(email.briefing || email.snippet) && (
+                                <div style={{
+                                  fontSize: 11, color: T.textMuted, lineHeight: 1.4,
+                                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  marginBottom: 5,
+                                }}>
+                                  {email.briefing || email.snippet}
+                                </div>
+                              )}
+
+                              {/* Priority indicator + category tags */}
+                              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                                {email.category && (
+                                  <span style={{
+                                    fontSize: 9, fontWeight: 600, padding: '2px 6px', borderRadius: 3,
+                                    background: 'rgba(139,92,246,0.12)', color: T.accentPurple,
+                                    textTransform: 'uppercase',
+                                  }}>
+                                    {email.category}
+                                  </span>
+                                )}
+                                {(email.pipeline_stage === 'action_required') && (
+                                  <span style={{
+                                    fontSize: 8, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+                                    background: T.dangerSoft, color: T.danger,
+                                    textTransform: 'uppercase',
+                                  }}>
+                                    Action
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                      {/* Footer */}
+                      <div style={{
+                        padding: '10px 14px', fontSize: 10, color: T.textDim, flexShrink: 0,
+                        borderTop: `1px solid ${T.border}`, textAlign: 'center',
+                        fontVariantNumeric: 'tabular-nums', fontWeight: 500,
+                      }}>
+                        {emails.length} email{emails.length !== 1 ? 's' : ''}
+                        {emailPriorityFilter && ` · ${emailPriorityFilter}`}
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+
+              {/* RIGHT: DETAIL PANEL — Enterprise glassmorphic design */}
+              <div style={{
+                flex: 1, display: 'flex', flexDirection: 'column',
+                minHeight: 0, background: T.bg,
+              }}>
+                {emailDetail ? (
+                  <div className="astra-scroll" style={{
+                    flex: 1, overflowY: 'auto', padding: '24px',
+                    animation: 'slideInRight 0.25s ease',
+                  }}>
+                    {/* Subject — Large, clear hierarchy */}
+                    <h2 style={{
+                      fontSize: 18, fontWeight: 700, color: T.text, margin: '0 0 14px 0',
+                      lineHeight: 1.35, letterSpacing: '-0.015em',
+                    }}>
+                      {emailDetail.subject || '(no subject)'}
+                    </h2>
+
+                    {/* Sender Card — Full width header */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px',
+                      borderRadius: 10, marginBottom: 18,
+                      background: 'rgba(139,92,246,0.06)',
+                      border: `1px solid rgba(139,92,246,0.12)`,
+                      backdropFilter: 'blur(8px)',
+                    }}>
+                      <div style={{
+                        width: 42, height: 42, borderRadius: '50%',
+                        background: `linear-gradient(135deg, ${T.accentCyan}, ${T.accentPurple})`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 16, fontWeight: 700, color: '#fff', flexShrink: 0,
+                      }}>
+                        {((emailDetail.sender || 'U')[0] || 'U').toUpperCase()}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 2 }}>
+                          {emailDetail.sender || 'Unknown'}
+                        </div>
+                        <div style={{ fontSize: 11, color: T.textMuted }}>
+                          {emailDetail.sender_email || ''}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right', fontSize: 11 }}>
+                        <div style={{ color: T.textMuted, fontWeight: 600, marginBottom: 2 }}>
+                          {emailDetail.thread_depth || 1} message{(emailDetail.thread_depth || 1) > 1 ? 's' : ''}
+                        </div>
+                        <div style={{ color: T.textDim, fontWeight: 500 }}>
+                          {emailDetail.sentiment ? emailDetail.sentiment.charAt(0).toUpperCase() + emailDetail.sentiment.slice(1) : 'Neutral'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Score + Priority + Category in horizontal layout */}
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
+                      <div style={{
+                        fontSize: 13, fontWeight: 800, color: '#fff',
+                        background: `linear-gradient(135deg, ${priorityColor(emailDetail.priority || 'low')}, ${T.accentPurple})`,
+                        padding: '8px 14px', borderRadius: 8,
+                        boxShadow: `0 2px 8px ${priorityColor(emailDetail.priority || 'low')}40`,
+                      }}>
+                        {emailDetail.score || 0}/10
+                      </div>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: '8px 12px', borderRadius: 6,
+                        background: priorityBg(emailDetail.priority || 'low'),
+                        color: priorityColor(emailDetail.priority || 'low'),
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.03em',
+                      }}>
+                        {emailDetail.priority || 'unknown'}
+                      </span>
+                      {emailDetail.category && (
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: '8px 12px', borderRadius: 6,
+                          background: 'rgba(139,92,246,0.12)', color: T.accentPurple,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.03em',
+                        }}>
+                          {emailDetail.category}
+                        </span>
+                      )}
+                      {emailDetail.scored_by === 'rules+ai' && (
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: '8px 12px', borderRadius: 6,
+                          background: T.successSoft, color: T.success,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.03em',
+                        }}>
+                          AI
+                        </span>
+                      )}
+                    </div>
+
+                    {/* AI Summary — Glassmorphic card */}
+                    {emailDetail.briefing && (
+                      <div style={{ marginBottom: 16 }}>
+                        <div style={{
+                          fontSize: 10, fontWeight: 700, color: T.accentCyan, textTransform: 'uppercase',
+                          marginBottom: 8, letterSpacing: '0.05em',
+                          display: 'flex', alignItems: 'center', gap: 6,
+                        }}>
+                          <span>⚡</span> AI Summary
+                        </div>
+                        <div style={{
+                          fontSize: 12, color: T.text, lineHeight: 1.6, padding: '14px 14px',
+                          borderRadius: 10,
+                          background: 'rgba(6,182,212,0.06)',
+                          border: `1px solid rgba(6,182,212,0.15)`,
+                          backdropFilter: 'blur(6px)',
+                          borderLeft: `4px solid ${T.accentCyan}`,
+                        }}>
+                          {emailDetail.briefing}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Strategic Context — Distinct visual treatment */}
+                    {emailDetail.strategic_context && (
+                      <div style={{ marginBottom: 16 }}>
+                        <div style={{
+                          fontSize: 10, fontWeight: 700, color: T.accentPurple, textTransform: 'uppercase',
+                          marginBottom: 8, letterSpacing: '0.05em',
+                        }}>
+                          Strategic Context
+                        </div>
+                        <div style={{
+                          fontSize: 12, color: T.textSecondary, lineHeight: 1.6, padding: '14px 14px',
+                          borderRadius: 10,
+                          background: 'rgba(139,92,246,0.05)',
+                          border: `1px solid rgba(139,92,246,0.1)`,
+                          backdropFilter: 'blur(6px)',
+                          borderLeft: `4px solid ${T.accentPurple}`,
+                        }}>
+                          {emailDetail.strategic_context}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Score Breakdown — Horizontal bar chart */}
+                    {emailDetail.scoring_breakdown && (
+                      <div style={{ marginBottom: 16 }}>
+                        <div style={{
+                          fontSize: 10, fontWeight: 700, color: T.textDim, textTransform: 'uppercase',
+                          marginBottom: 10, letterSpacing: '0.05em',
+                        }}>
+                          Scoring Details
+                        </div>
+                        <div style={{
+                          padding: '14px', borderRadius: 10,
+                          background: T.bgCard, border: `1px solid ${T.border}`,
+                        }}>
+                          {Object.entries(emailDetail.scoring_breakdown)
+                            .filter(([k, v]) => k !== 'final_score' && k !== 'passes_fired' && typeof v === 'object' && v && v.score !== undefined && v.score > 0)
+                            .map(([key, val], idx) => (
+                              <div key={key} style={{ marginBottom: idx < 3 ? 10 : 0 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                                  <span style={{ color: T.textSecondary, fontWeight: 600, textTransform: 'capitalize' }}>{key.replace(/_/g, ' ')}</span>
+                                  <span style={{ color: T.accentCyan, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>+{val.score}</span>
+                                </div>
+                                <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.03)', overflow: 'hidden' }}>
+                                  <div style={{
+                                    height: '100%', borderRadius: 3,
+                                    background: `linear-gradient(90deg, ${T.accentCyan}, ${T.accentPurple})`,
+                                    width: `${Math.min((val.score || 0) * 12, 100)}%`,
+                                    transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+                                    boxShadow: `0 0 8px ${T.accentCyan}40`,
+                                  }} />
+                                </div>
+                              </div>
+                            ))}
+                          {emailDetail.scoring_breakdown.noise?.penalty < 0 && (
+                            <div style={{ marginTop: 10 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                                <span style={{ color: T.danger, fontWeight: 600 }}>Noise Penalty</span>
+                                <span style={{ color: T.danger, fontWeight: 800 }}>{emailDetail.scoring_breakdown.noise.penalty}</span>
+                              </div>
+                              <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.03)', overflow: 'hidden' }}>
+                                <div style={{
+                                  height: '100%', borderRadius: 3, background: T.danger,
+                                  width: `${Math.min(Math.abs(emailDetail.scoring_breakdown.noise.penalty || 0) * 12, 100)}%`,
+                                  transition: 'width 0.5s ease',
+                                  boxShadow: `0 0 8px ${T.danger}40`,
+                                }} />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* AI Draft Reply */}
+                    {emailDetail.draft_reply && (
+                      <div style={{ marginBottom: 16 }}>
+                        <div style={{
+                          fontSize: 10, fontWeight: 700, color: T.success, textTransform: 'uppercase',
+                          marginBottom: 8, letterSpacing: '0.05em',
+                        }}>
+                          Suggested Reply
+                        </div>
+                        <div style={{
+                          padding: '14px', borderRadius: 10,
+                          background: 'rgba(34,197,94,0.06)',
+                          border: `1px solid rgba(34,197,94,0.12)`,
+                          backdropFilter: 'blur(6px)',
+                          borderLeft: `4px solid ${T.success}`,
+                          fontSize: 12, color: T.text, lineHeight: 1.6,
+                        }}>
+                          {emailDetail.draft_reply}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Voice-Matched Draft */}
+                    {draftResult && (
+                      <div style={{ marginBottom: 16, animation: 'slideInUp 0.25s ease' }}>
+                        <div style={{
+                          fontSize: 10, fontWeight: 700, color: T.accentPurple, textTransform: 'uppercase',
+                          marginBottom: 8, letterSpacing: '0.05em',
+                          display: 'flex', alignItems: 'center', gap: 6,
+                        }}>
+                          🎙️ Voice Draft
+                          {draftResult.style_fingerprint?.formality && (
+                            <span style={{
+                              fontSize: 9, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
+                              background: 'rgba(139,92,246,0.1)', color: T.accentPurple,
+                              textTransform: 'capitalize',
+                            }}>
+                              {draftResult.style_fingerprint.formality}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{
+                          padding: '14px', borderRadius: 10,
+                          background: 'rgba(139,92,246,0.05)',
+                          border: `1px solid rgba(139,92,246,0.1)`,
+                          backdropFilter: 'blur(6px)',
+                          borderLeft: `4px solid ${T.accentPurple}`,
+                          fontSize: 12, color: T.text, lineHeight: 1.65, whiteSpace: 'pre-wrap',
+                        }}>
+                          {draftResult.draft || 'No draft generated.'}
+                        </div>
+                        {draftResult.style_fingerprint && (
+                          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                            {['tone', 'emoji_usage', 'avg_sentence_length'].filter(k => draftResult.style_fingerprint[k]).map(k => (
+                              <span key={k} style={{
+                                fontSize: 9, padding: '4px 8px', borderRadius: 4,
+                                background: 'rgba(139,92,246,0.08)', color: T.accentPurple, fontWeight: 600,
+                                textTransform: 'capitalize',
+                              }}>
+                                {k.replace(/_/g, ' ')}: {draftResult.style_fingerprint[k]}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Action Buttons — Primary CTA + Stage dropdown + Utilities */}
+                    <div style={{
+                      display: 'flex', flexDirection: 'column', gap: 10, marginTop: 20,
+                      paddingTop: 16, borderTop: `1px solid ${T.border}`,
+                    }}>
+                      <button
+                        onClick={() => {
+                          const emails = currentSplitEmails.length > 0 ? currentSplitEmails : filteredScored
+                          if (emails[selectedEmailIdx]) handleDraft(emails[selectedEmailIdx])
+                        }}
+                        disabled={drafting}
+                        className="astra-action-btn"
+                        style={{
+                          width: '100%', padding: '12px 16px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                          background: `linear-gradient(135deg, ${T.accentCyan}, ${T.accentPurple})`,
+                          color: '#fff', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em',
+                          transition: 'all 0.2s', opacity: drafting ? 0.6 : 1,
+                          boxShadow: drafting ? 'none' : `0 4px 12px ${T.accentCyan}30`,
+                          position: 'relative',
+                        }}
+                      >
+                        🎙️ {drafting ? 'Generating...' : 'Voice Draft Reply'}
+                        <span style={{ marginLeft: 8, fontSize: 10, opacity: 0.7 }}>R</span>
+                      </button>
+
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <select
+                          style={{
+                            flex: 1, padding: '10px 12px', borderRadius: 8,
+                            background: T.bgInput, border: `1px solid ${T.border}`,
+                            color: T.text, fontSize: 11, fontWeight: 600,
+                            cursor: 'pointer', outline: 'none',
+                            transition: 'all 0.2s',
+                          }}
+                          defaultValue={emailDetail.pipeline_stage || 'triaged'}
+                          onChange={(e) => moveStage(emailDetail.message_id || emailDetailId, e.target.value)}
+                        >
+                          <option value="triaged">Triaged</option>
+                          <option value="action_required">Action Required</option>
+                          <option value="delegated">Delegated</option>
+                          <option value="scheduled">Scheduled</option>
+                          <option value="replied">Replied</option>
+                          <option value="done">Done</option>
+                          <option value="archived">Archived</option>
+                        </select>
+                        <button
+                          onClick={() => moveStage(emailDetail.message_id || emailDetailId, 'archived')}
+                          className="astra-action-btn"
+                          style={{
+                            padding: '10px 14px', borderRadius: 8, border: `1px solid ${T.border}`,
+                            background: T.bgInput, color: T.textMuted, cursor: 'pointer',
+                            fontSize: 11, fontWeight: 600, transition: 'all 0.2s',
+                            title: 'Archive (A)',
+                          }}
+                          title="Archive"
+                        >
+                          📦
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{
+                    flex: 1, display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center',
+                    padding: 40, textAlign: 'center',
+                  }}>
+                    <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke={T.textDim} strokeWidth="1.5" style={{ marginBottom: 14, opacity: 0.25 }}>
+                      <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/>
+                    </svg>
+                    <div style={{ fontSize: 13, color: T.textMuted, fontWeight: 600, marginBottom: 4 }}>
+                      Select an email
+                    </div>
+                    <div style={{ fontSize: 11, color: T.textDim }}>
+                      Choose from the list to view AI analysis and take action
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── PIPELINE TAB ── */}
+          {emailIntelTab === 'pipeline' && (
+            <div className="astra-scroll" style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
+              {pipelineSummary ? (
+                <div style={{ animation: 'fadeIn 0.3s ease' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 18 }}>
+                    <div style={{ padding: '14px', borderRadius: 10, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                      <div style={{
+                        fontSize: 9, fontWeight: 700, color: T.accentCyan, textTransform: 'uppercase',
+                        marginBottom: 10, letterSpacing: '0.06em',
+                      }}>
+                        By Priority
+                      </div>
+                      {Object.entries(pipelineSummary.by_priority || {}).map(([p, count]) => (
+                        <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
+                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: priorityColor(p), boxShadow: `0 0 4px ${priorityColor(p)}` }} />
+                          <span style={{ fontSize: 11, color: T.text, fontWeight: 600, flex: 1, textTransform: 'capitalize' }}>{p}</span>
+                          <span style={{ fontSize: 13, fontWeight: 800, color: priorityColor(p), fontVariantNumeric: 'tabular-nums' }}>{count}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ padding: '14px', borderRadius: 10, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                      <div style={{
+                        fontSize: 9, fontWeight: 700, color: T.accentPurple, textTransform: 'uppercase',
+                        marginBottom: 10, letterSpacing: '0.06em',
+                      }}>
+                        By Stage
+                      </div>
+                      {Object.entries(pipelineSummary.by_stage || {}).map(([s, count]) => (
+                        <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
+                            <span style={{
+                              width: 10, height: 10, borderRadius: 3,
+                              background: s === 'action_required' ? T.danger : s === 'done' ? T.success : T.accentCyan,
+                              flexShrink: 0,
+                            }} />
+                            <span style={{ fontSize: 11, color: T.text, fontWeight: 600, flex: 1, textTransform: 'capitalize' }}>
+                              {s.replace(/_/g, ' ')}
+                            </span>
+                            <span style={{ fontSize: 13, fontWeight: 800, color: T.textSecondary }}>
+                              {count}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                  {(pipelineSummary.action_required_emails || []).length > 0 && (
+                    <div style={{ padding: '14px', borderRadius: 10, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: T.danger, textTransform: 'uppercase', marginBottom: 10, letterSpacing: '0.06em' }}>
+                        Action Required
+                      </div>
+                      {pipelineSummary.action_required_emails.map((e, i) => (
+                        <div key={i} style={{
+                          padding: '8px 10px', borderRadius: 6, marginBottom: 6,
+                          background: T.bgSurface, borderLeft: `3px solid ${priorityColor(e.priority || 'low')}`,
+                          display: 'flex', gap: 8, alignItems: 'flex-start',
+                        }}>
+                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: priorityColor(e.priority || 'low'), marginTop: 5, flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: T.text, marginBottom: 2 }}>
+                              {e.sender || 'Unknown'} — {e.subject || 'No subject'}
+                            </div>
+                            <div style={{ fontSize: 10, color: T.textMuted }}>{e.briefing || e.snippet || ''}</div>
+                          </div>
+                          <span style={{ fontSize: 13, fontWeight: 800, color: priorityColor(e.priority || 'low'), flexShrink: 0 }}>{e.score || 0}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ) : (
-                routingRules.map(rule => (
-                  <RoutingRuleCard key={rule.id} rule={rule} />
-                ))
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60, textAlign: 'center' }}>
+                  <div style={{ fontSize: 13, color: T.textMuted, fontWeight: 600, marginBottom: 4 }}>No pipeline data</div>
+                  <div style={{ fontSize: 11, color: T.textDim }}>Run a scan to populate</div>
+                </div>
               )}
             </div>
-          </>
+          )}
+
+          {/* ── CONTACTS TAB ── */}
+          {emailIntelTab === 'contacts' && (
+            <div className="astra-scroll" style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
+              {contactTiers ? (
+                <div style={{ animation: 'fadeIn 0.3s ease' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 18 }}>
+                    {[
+                      { label: 'VIP', tier: 'tier_1', color: T.danger },
+                      { label: 'Active', tier: 'tier_2', color: T.accentCyan },
+                      { label: 'Other', tier: 'tier_3', color: T.textMuted },
+                    ].map(({ label, tier, color }) => (
+                      <div key={tier} style={{ padding: '14px', borderRadius: 10, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color, textTransform: 'uppercase', marginBottom: 10, letterSpacing: '0.06em' }}>
+                          Tier — {label}
+                          <span style={{ marginLeft: 6, fontSize: 9, color: T.textDim }}>({Object.keys(contactTiers[tier] || {}).length})</span>
+                        </div>
+                        {Object.entries(contactTiers[tier] || {}).map(([email, name]) => (
+                          <div key={email} style={{ padding: '6px 8px', borderRadius: 6, background: T.bgSurface, marginBottom: 4 }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: T.text }}>{name || email}</div>
+                            <div style={{ fontSize: 9, color: T.textMuted }}>{email}</div>
+                          </div>
+                        ))}
+                        {Object.keys(contactTiers[tier] || {}).length === 0 && (
+                          <div style={{ fontSize: 10, color: T.textDim, padding: 8 }}>
+                            None
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {(contactTiers.auto_learned?.length > 0 || contactTiers.noise_domains?.length > 0 || contactTiers.noise_senders?.length > 0) && (
+                    <div style={{ padding: '14px', borderRadius: 10, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                      {(contactTiers.auto_learned || []).length > 0 && (
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: T.accentCyan, textTransform: 'uppercase', marginBottom: 8, letterSpacing: '0.06em' }}>Auto-Learned</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {contactTiers.auto_learned.map(e => (
+                              <span key={e} style={{ fontSize: 9, padding: '3px 8px', borderRadius: 4, background: 'rgba(6,182,212,0.08)', color: T.accentCyan, fontWeight: 600 }}>{e}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {((contactTiers.noise_domains || []).length > 0 || (contactTiers.noise_senders || []).length > 0) && (
+                        <div>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: T.danger, textTransform: 'uppercase', marginBottom: 8, letterSpacing: '0.06em' }}>Noise Filters</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {(contactTiers.noise_domains || []).map(d => (
+                              <span key={d} style={{ fontSize: 9, padding: '3px 8px', borderRadius: 4, background: T.dangerSoft, color: T.danger, fontWeight: 600 }}>{d}</span>
+                            ))}
+                            {(contactTiers.noise_senders || []).map(s => (
+                              <span key={s} style={{ fontSize: 9, padding: '3px 8px', borderRadius: 4, background: T.bgSurface, color: T.textMuted, fontWeight: 600 }}>{s}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60, textAlign: 'center' }}>
+                  <div style={{ fontSize: 13, color: T.textMuted, fontWeight: 600, marginBottom: 4 }}>No contact data</div>
+                  <div style={{ fontSize: 11, color: T.textDim }}>Run a scan to initialize contacts</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── BRIEFING TAB ── */}
+          {emailIntelTab === 'briefing' && (
+            <div className="astra-scroll" style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
+              {emailBriefing ? (
+                <div style={{ animation: 'fadeIn 0.3s ease' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, marginBottom: 18 }}>
+                    {[
+                      { label: 'Recent', value: emailBriefing.summary?.total_recent || 0, color: T.accentCyan },
+                      { label: 'Critical', value: emailBriefing.summary?.critical || 0, color: T.danger },
+                      { label: 'Urgent', value: emailBriefing.summary?.urgent || 0, color: T.warning },
+                      { label: 'Unread', value: emailBriefing.summary?.unread || 0, color: T.accentPurple },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} style={{
+                        padding: '10px 12px', borderRadius: 8, background: T.bgCard,
+                        border: `1px solid ${T.border}`, textAlign: 'center',
+                      }}>
+                        <div style={{
+                          fontSize: 18, fontWeight: 800, color, fontVariantNumeric: 'tabular-nums',
+                        }}>
+                          {value}
+                        </div>
+                        <div style={{ fontSize: 9, color: T.textMuted, fontWeight: 600, textTransform: 'uppercase' }}>
+                          {label}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {emailBriefing.voice_briefing && (
+                    <div style={{
+                      padding: '14px', borderRadius: 10, marginBottom: 18,
+                      background: T.bgCard, borderLeft: `3px solid ${T.accentCyan}`,
+                      border: `1px solid ${T.borderAccent}`,
+                    }}>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: T.accentCyan, textTransform: 'uppercase', marginBottom: 8, letterSpacing: '0.06em' }}>Voice Briefing</div>
+                      <p style={{ fontSize: 12, color: T.text, lineHeight: 1.65, margin: 0 }}>{emailBriefing.voice_briefing}</p>
+                    </div>
+                  )}
+                  {(emailBriefing.action_items || []).length > 0 && (
+                    <div style={{ padding: '14px', borderRadius: 10, background: T.bgCard, border: `1px solid ${T.border}` }}>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: T.danger, textTransform: 'uppercase', marginBottom: 10, letterSpacing: '0.06em' }}>
+                        Action Items ({emailBriefing.action_items.length})
+                      </div>
+                      {emailBriefing.action_items.map((item, i) => (
+                        <div key={i} style={{
+                          padding: '8px 10px', borderRadius: 6, marginBottom: 6,
+                          background: T.bgSurface, borderLeft: `3px solid ${priorityColor(item.priority || 'low')}`,
+                          display: 'flex', gap: 8, alignItems: 'flex-start',
+                        }}>
+                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: priorityColor(item.priority || 'low'), marginTop: 5, flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: T.text, marginBottom: 2 }}>
+                              {item.sender || 'Unknown'} — {item.subject || 'No subject'}
+                            </div>
+                            <div style={{ fontSize: 10, color: T.textMuted }}>{item.briefing || (item.action ? `Action: ${item.action}` : '')}</div>
+                          </div>
+                          <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                            <div style={{ fontSize: 13, fontWeight: 800, color: priorityColor(item.priority || 'low') }}>{item.score || 0}</div>
+                            {item.has_draft_reply && (
+                              <div style={{ fontSize: 8, color: T.success, fontWeight: 700 }}>DRAFT</div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 60, textAlign: 'center' }}>
+                  <div style={{ fontSize: 13, color: T.textMuted, fontWeight: 600, marginBottom: 4 }}>No briefing data</div>
+                  <div style={{ fontSize: 11, color: T.textDim }}>Scan your inbox to generate a briefing</div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ═══ KPI BAR — Bento grid style ═══ */}
+        {pipelineSummary && (
+          <div style={{
+            display: 'flex', gap: 12, padding: '14px 24px', flexShrink: 0,
+            borderTop: `1px solid ${T.border}`, background: T.bgElevated,
+          }}>
+            {[
+              { label: 'Critical', value: pipelineSummary.by_priority?.critical || 0, color: T.danger, emoji: '🔴' },
+              { label: 'Urgent', value: pipelineSummary.by_priority?.urgent || 0, color: T.warning, emoji: '🟠' },
+              { label: 'Total', value: pipelineSummary.total || 0, color: T.accentCyan, emoji: '📧' },
+              { label: 'Action', value: pipelineSummary.action_required || 0, color: '#3b82f6', emoji: '✓' },
+            ].map(kpi => (
+              <div key={kpi.label} style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '8px 14px', borderRadius: 8, background: T.bgCard,
+                border: `1px solid ${T.border}`,
+                flex: 1, minWidth: 0,
+              }}>
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', background: kpi.color, flexShrink: 0,
+                  boxShadow: kpi.value > 0 ? `0 0 8px ${kpi.color}40` : 'none',
+                }} />
+                <span style={{ fontSize: 14, fontWeight: 800, color: kpi.color, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
+                  {kpi.value}
+                </span>
+                <span style={{ fontSize: 11, color: T.textMuted, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {kpi.label}
+                </span>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     )
+
   }
 
   // ── CRM view ────────────────────────────────────────────────────────────

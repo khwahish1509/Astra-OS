@@ -52,7 +52,7 @@ SCOPES = [
 
 MAX_RETRIES = 3
 RETRY_DELAY = 1.5
-MAX_CONCURRENT_FETCHES = 5  # parallel message fetches
+MAX_CONCURRENT_FETCHES = 15  # parallel message fetches
 
 
 class GmailClient:
@@ -150,13 +150,20 @@ class GmailClient:
     async def get_recent_emails(
         self,
         hours_back: int = 24,
-        max_results: int = 30,
-        exclude_promotions: bool = True,
+        max_results: int = 500,
+        exclude_promotions: bool = False,
         unread_only: bool = False,
     ) -> list[EmailMessage]:
         """
         Fetch emails received in the last N hours.
+        Uses PAGINATED listing to get ALL matching emails (not just one page).
         Uses parallel fetching with semaphore control for speed.
+
+        Args:
+            hours_back: How far back to look (87600 = ~10 years = all emails)
+            max_results: Maximum emails to return (default 500, set higher for full sync)
+            exclude_promotions: If True, skip promo/social/updates categories
+            unread_only: If True, only fetch unread emails
         """
         after_ts = int((datetime.utcnow() - timedelta(hours=hours_back)).timestamp())
         query = f"after:{after_ts}"
@@ -165,34 +172,64 @@ class GmailClient:
         if unread_only:
             query += " is:unread"
 
-        def _fetch():
-            service = self._build_service()
-            result = service.users().messages().list(
-                userId="me", q=query, maxResults=max_results
-            ).execute()
-            return result.get("messages", [])
+        # ── Paginated listing — fetch ALL message IDs ──
+        all_message_refs = []
+        page_token = None
+        page_size = min(max_results, 500)  # Gmail API max per page is 500
 
-        message_refs = await self._retry_call(_fetch, "list messages")
-        if not message_refs:
+        while len(all_message_refs) < max_results:
+            remaining = max_results - len(all_message_refs)
+            batch = min(remaining, page_size)
+
+            def _fetch_page(pt=page_token, bs=batch):
+                service = self._build_service()
+                kwargs = {"userId": "me", "q": query, "maxResults": bs}
+                if pt:
+                    kwargs["pageToken"] = pt
+                result = service.users().messages().list(**kwargs).execute()
+                return result
+
+            result = await self._retry_call(_fetch_page, f"list messages (page {len(all_message_refs) // page_size + 1})")
+            if not result:
+                break
+
+            refs = result.get("messages", [])
+            all_message_refs.extend(refs)
+            page_token = result.get("nextPageToken")
+
+            if not page_token or not refs:
+                break  # No more pages
+
+        if not all_message_refs:
+            print(f"[Gmail] No messages found for query: {query}")
             return []
 
-        print(f"[Gmail] Found {len(message_refs)} messages, fetching details...")
+        print(f"[Gmail] Found {len(all_message_refs)} messages, fetching details...")
 
-        # Parallel fetch with semaphore to avoid overwhelming the API
+        # ── Parallel fetch with semaphore ──
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
         emails = []
+        failed = 0
 
         async def _fetch_one(ref):
+            nonlocal failed
             async with semaphore:
                 email = await self._fetch_message(ref["id"])
                 if email:
                     emails.append(email)
+                else:
+                    failed += 1
 
-        await asyncio.gather(*[_fetch_one(ref) for ref in message_refs])
+        # Process in batches of 100 to show progress
+        for i in range(0, len(all_message_refs), 100):
+            batch = all_message_refs[i:i + 100]
+            await asyncio.gather(*[_fetch_one(ref) for ref in batch])
+            if len(all_message_refs) > 100:
+                print(f"[Gmail] Progress: {min(i + 100, len(all_message_refs))}/{len(all_message_refs)} fetched ({len(emails)} ok, {failed} failed)")
 
         # Sort by timestamp, newest first
         emails.sort(key=lambda e: e.timestamp, reverse=True)
-        print(f"[Gmail] ✅ Retrieved {len(emails)} emails")
+        print(f"[Gmail] ✅ Retrieved {len(emails)} emails (query covered {hours_back}h back)")
         return emails
 
     async def get_emails_from_sender(
@@ -358,6 +395,160 @@ class GmailClient:
         except Exception as e:
             print(f"[Gmail] ❌ reply to thread {thread_id} failed: {e}")
             return False
+
+    # ── Intelligence Helpers (for EmailIntelligencePipeline) ─────────────────
+
+    async def get_sent_emails(
+        self, hours_back: int = 720, max_results: int = 100
+    ) -> list[dict]:
+        """
+        Fetch founder's sent emails to learn who they communicate with.
+        Returns lightweight dicts: {thread_id, to_email, subject, timestamp}
+        Used by EmailScoringEngine.learn_from_sent_items()
+        """
+        after_ts = int((datetime.utcnow() - timedelta(hours=hours_back)).timestamp())
+        query = f"in:sent after:{after_ts}"
+
+        def _fetch():
+            service = self._build_service()
+            result = service.users().messages().list(
+                userId="me", q=query, maxResults=max_results
+            ).execute()
+            return result.get("messages", [])
+
+        message_refs = await self._retry_call(_fetch, "sent items")
+        if not message_refs:
+            return []
+
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
+        results = []
+
+        async def _fetch_one(ref):
+            async with semaphore:
+                def _get():
+                    service = self._build_service()
+                    return service.users().messages().get(
+                        userId="me", id=ref["id"], format="metadata",
+                        metadataHeaders=["To", "Subject"]
+                    ).execute()
+                msg = await self._retry_call(_get, f"sent:{ref['id'][:8]}")
+                if msg:
+                    headers = {
+                        h["name"].lower(): h["value"]
+                        for h in msg.get("payload", {}).get("headers", [])
+                    }
+                    _, to_email = parseaddr(headers.get("to", ""))
+                    results.append({
+                        "thread_id": msg.get("threadId", ""),
+                        "to_email": to_email,
+                        "subject": headers.get("subject", ""),
+                        "timestamp": int(msg.get("internalDate", "0")) / 1000.0,
+                    })
+
+        await asyncio.gather(*[_fetch_one(ref) for ref in message_refs])
+        print(f"[Gmail] ✅ Retrieved {len(results)} sent emails for contact learning")
+        return results
+
+    async def get_thread_metadata(self, thread_ids: list[str]) -> dict[str, dict]:
+        """
+        Fetch thread metadata for multiple threads (depth, participants).
+        Returns: {thread_id: {depth: int, participants: [email], has_founder: bool}}
+        """
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
+        results = {}
+
+        async def _fetch_one(tid):
+            async with semaphore:
+                def _get():
+                    service = self._build_service()
+                    thread = service.users().threads().get(
+                        userId="me", id=tid, format="metadata",
+                        metadataHeaders=["From", "To", "Cc"]
+                    ).execute()
+                    return thread
+                try:
+                    thread = await self._retry_call(_get, f"thread_meta:{tid[:8]}")
+                    if thread:
+                        messages = thread.get("messages", [])
+                        participants = set()
+                        for msg in messages:
+                            for h in msg.get("payload", {}).get("headers", []):
+                                if h["name"].lower() in ("from", "to", "cc"):
+                                    for addr in h["value"].split(","):
+                                        _, email = parseaddr(addr.strip())
+                                        if email:
+                                            participants.add(email.lower())
+                        results[tid] = {
+                            "depth": len(messages),
+                            "participants": list(participants),
+                        }
+                except Exception:
+                    results[tid] = {"depth": 1, "participants": []}
+
+        await asyncio.gather(*[_fetch_one(tid) for tid in thread_ids])
+        return results
+
+    async def get_message_metadata(self, message_ids: list[str]) -> dict[str, dict]:
+        """
+        Fetch lightweight metadata for messages: CC list, attachment info, importance flag.
+        Returns: {message_id: {cc_emails: [], has_attachment: bool, importance: bool}}
+        """
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
+        results = {}
+
+        async def _fetch_one(mid):
+            async with semaphore:
+                def _get():
+                    service = self._build_service()
+                    return service.users().messages().get(
+                        userId="me", id=mid, format="metadata",
+                        metadataHeaders=["Cc", "Importance", "X-Priority"]
+                    ).execute()
+                try:
+                    msg = await self._retry_call(_get, f"meta:{mid[:8]}")
+                    if msg:
+                        headers = {
+                            h["name"].lower(): h["value"]
+                            for h in msg.get("payload", {}).get("headers", [])
+                        }
+                        # Extract CC emails
+                        cc_raw = headers.get("cc", "")
+                        cc_emails = []
+                        if cc_raw:
+                            for addr in cc_raw.split(","):
+                                _, email = parseaddr(addr.strip())
+                                if email:
+                                    cc_emails.append(email.lower())
+
+                        # Check attachments (any part with a filename)
+                        has_attachment = self._check_attachments(msg.get("payload", {}))
+
+                        # Check importance flag
+                        importance = headers.get("importance", "").lower()
+                        x_priority = headers.get("x-priority", "")
+                        is_important = importance == "high" or x_priority in ("1", "2")
+
+                        results[mid] = {
+                            "cc_emails": cc_emails,
+                            "has_attachment": has_attachment,
+                            "importance": is_important,
+                        }
+                except Exception:
+                    results[mid] = {"cc_emails": [], "has_attachment": False, "importance": False}
+
+        await asyncio.gather(*[_fetch_one(mid) for mid in message_ids])
+        return results
+
+    def _check_attachments(self, payload: dict) -> bool:
+        """Recursively check if a message has attachments."""
+        if payload.get("filename"):
+            return True
+        for part in payload.get("parts", []):
+            if part.get("filename"):
+                return True
+            if self._check_attachments(part):
+                return True
+        return False
 
     # ── Parsing ───────────────────────────────────────────────────────────────
 

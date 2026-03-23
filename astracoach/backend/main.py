@@ -18,6 +18,26 @@ Brain endpoints (new):
   POST /brain/monitor          — trigger risk monitor
   GET  /auth/gmail             — Gmail OAuth flow
   GET  /health                 — health check
+
+Email Intelligence endpoints:
+  GET  /brain/emails/scored              — scored emails (filter by priority/stage/category)
+  GET  /brain/emails/pipeline            — pipeline summary (counts by priority/stage)
+  POST /brain/emails/intelligence-scan   — trigger full intelligence scan
+  GET  /brain/emails/health              — scanner health status
+  PATCH /brain/emails/{id}/stage         — move email through pipeline
+  GET  /brain/emails/{id}/detail         — full email detail + scoring breakdown
+  GET  /brain/emails/briefing            — founder voice briefing digest
+  POST /brain/contacts/tier              — add/update contact tier
+  GET  /brain/contacts/tiers             — list all contact tiers
+
+RAG Email Memory + Voice-Matched Drafts + Split Inbox:
+  POST /brain/emails/search              — semantic search across email history (RAG)
+  GET  /brain/emails/splits              — emails organized by split inbox tabs
+  POST /brain/emails/draft               — generate voice-matched draft reply
+  GET  /brain/emails/style/{email}       — writing style profile for a contact
+  POST /brain/emails/embed-sync          — trigger email embedding sync
+  GET  /brain/emails/embed-stats         — embedding pipeline statistics
+  POST /brain/emails/split-move          — record manual split move (auto-learning)
 """
 
 import asyncio
@@ -71,6 +91,9 @@ _email_scanner = None
 _risk_monitor  = None
 _brain_tool_fns = None   # dict of {name: async_fn} from brain_tools.build_tools()
 _memory_service = None   # FirestoreMemoryService for long-term memory
+_email_memory  = None    # EmailMemoryStore — RAG email search
+_voice_drafter = None    # VoiceMatchedDraftEngine — style-matched drafts
+_split_inbox   = None    # SplitInboxEngine — auto-categorized splits
 
 # ─────────────────────────────────────────────
 # App lifecycle
@@ -78,7 +101,7 @@ _memory_service = None   # FirestoreMemoryService for long-term memory
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _brain_store, _embeddings, _gmail, _calendar, _drive, _tasks, _contacts, _email_scanner, _risk_monitor, _brain_tool_fns, _memory_service
+    global _brain_store, _embeddings, _gmail, _calendar, _drive, _tasks, _contacts, _email_scanner, _risk_monitor, _brain_tool_fns, _memory_service, _email_memory, _voice_drafter, _split_inbox
 
     print("🚀 Astra OS starting...")
     print(f"   Voice Model: {os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-native-audio-latest')}")
@@ -125,6 +148,23 @@ async def lifespan(app: FastAPI):
                 store=_brain_store, api_key=GOOGLE_API_KEY,
                 founder_id=FOUNDER_ID, check_interval_minutes=RISK_CHECK_INTERVAL,
             )
+
+            # Initialize RAG Email Memory + Voice-Matched Drafting + Split Inbox
+            from agents.email_memory import EmailMemoryStore
+            from agents.voice_drafter import VoiceMatchedDraftEngine, SplitInboxEngine
+
+            _email_memory = EmailMemoryStore(
+                store=_brain_store,
+                embeddings=_embeddings,
+                api_key=GOOGLE_API_KEY,
+                founder_id=FOUNDER_ID,
+            )
+            _voice_drafter = VoiceMatchedDraftEngine(
+                email_memory=_email_memory,
+                api_key=GOOGLE_API_KEY,
+            )
+            _split_inbox = SplitInboxEngine()
+            print("[Astra OS] 🧠 Email Memory + Voice Drafter + Split Inbox initialized")
 
             # Build brain tools for voice session injection
             from agents.brain_tools import ToolDeps, build_tools
@@ -1802,6 +1842,684 @@ async def seed_demo_data():
             "total_records": 3 + 3 + 6 + len(tasks) + len(insights) + len(alerts) + len(routed_emails)
         }
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Email Intelligence API  (powered by agents/email_intelligence.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/brain/emails/scored")
+async def get_scored_emails(
+    priority: Optional[str] = None,
+    stage: Optional[str] = None,
+    category: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """
+    Fetch scored emails from the intelligence pipeline.
+    Supports filtering by priority (critical/urgent/important/notable/low/noise),
+    pipeline stage (new/triaged/action_required/delegated/scheduled/replied/done/archived),
+    and category (investor/customer/partner/internal/...).
+    """
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    try:
+        db = _brain_store._db
+        query = db.collection("scored_emails").order_by(
+            "processed_at", direction="DESCENDING"
+        )
+
+        # Firestore compound filters — apply one equality filter at a time
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        if priority:
+            query = query.where(filter=FieldFilter("priority", "==", priority))
+        elif stage:
+            query = query.where(filter=FieldFilter("pipeline_stage", "==", stage))
+        elif category:
+            query = query.where(filter=FieldFilter("category", "==", category))
+
+        query = query.offset(offset).limit(limit)
+        docs = await asyncio.to_thread(lambda: list(query.stream()))
+        emails = [d.to_dict() for d in docs]
+
+        # If multiple filters requested, apply remaining in-memory
+        if priority and stage:
+            emails = [e for e in emails if e.get("pipeline_stage") == stage]
+        if priority and category:
+            emails = [e for e in emails if e.get("category") == category]
+        if stage and category and not priority:
+            emails = [e for e in emails if e.get("category") == category]
+
+        return {
+            "emails": emails,
+            "count": len(emails),
+            "filters": {"priority": priority, "stage": stage, "category": category},
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch scored emails: {e}")
+
+
+@app.get("/brain/emails/pipeline")
+async def get_email_pipeline_summary():
+    """
+    Get a high-level pipeline summary:
+    - Breakdown by priority, stage, and category
+    - Action-required emails (top 10)
+    - Scanner health status
+    """
+    if not _email_scanner:
+        raise HTTPException(503, "Email intelligence not initialized")
+    try:
+        # The scanner holds references to the intelligence pipeline components
+        pipeline = getattr(_email_scanner, "_pipeline", None)
+        if pipeline:
+            summary = await pipeline.get_pipeline_summary()
+            return summary
+
+        # Fallback: query Firestore directly
+        db = _brain_store._db
+        docs = await asyncio.to_thread(
+            lambda: list(
+                db.collection("scored_emails")
+                .order_by("processed_at", direction="DESCENDING")
+                .limit(200)
+                .stream()
+            )
+        )
+        emails = [d.to_dict() for d in docs]
+
+        by_priority = {}
+        by_stage = {}
+        by_category = {}
+        for e in emails:
+            p = e.get("priority", "low")
+            s = e.get("pipeline_stage", "new")
+            c = e.get("category", "unknown")
+            by_priority[p] = by_priority.get(p, 0) + 1
+            by_stage[s] = by_stage.get(s, 0) + 1
+            by_category[c] = by_category.get(c, 0) + 1
+
+        action_required = [
+            e for e in emails if e.get("pipeline_stage") == "action_required"
+        ]
+
+        return {
+            "total": len(emails),
+            "by_priority": by_priority,
+            "by_stage": by_stage,
+            "by_category": by_category,
+            "action_required": len(action_required),
+            "action_required_emails": action_required[:10],
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Pipeline summary failed: {e}")
+
+
+@app.post("/brain/emails/intelligence-scan")
+async def trigger_intelligence_scan(hours_back: int = 87600, max_fetch: int = 5000):
+    """
+    Trigger a full email intelligence scan (scoring + classification + dedup).
+    This runs the complete two-layer pipeline, not just insight extraction.
+    Default: ~10 years of emails (entire mailbox). max_fetch controls how many to process.
+    Returns scored email summary.
+    """
+    if not _email_scanner:
+        raise HTTPException(503, "Email intelligence not initialized")
+    if not (_gmail and _gmail.is_authenticated()):
+        raise HTTPException(401, "Gmail not authenticated — visit /auth/gmail first")
+    try:
+        n = await _email_scanner.run_once(hours_back=hours_back, max_fetch=max_fetch)
+        # Get latest scored emails for response
+        db = _brain_store._db
+        docs = await asyncio.to_thread(
+            lambda: list(
+                db.collection("scored_emails")
+                .order_by("processed_at", direction="DESCENDING")
+                .limit(20)
+                .stream()
+            )
+        )
+        recent = [d.to_dict() for d in docs]
+        return {
+            "insights_extracted": n,
+            "scored_emails_count": len(recent),
+            "recent_scored": recent[:10],
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Intelligence scan failed: {e}")
+
+
+@app.get("/brain/emails/health")
+async def get_email_scanner_health():
+    """Get scanner health status: uptime, success/failure counts, last scan time."""
+    if not _email_scanner:
+        raise HTTPException(503, "Email intelligence not initialized")
+    try:
+        health_monitor = getattr(_email_scanner, "_health", None)
+        if health_monitor:
+            return health_monitor.get_status()
+
+        return {
+            "status": "running" if _email_scanner._running else "stopped",
+            "gmail_authenticated": _gmail.is_authenticated() if _gmail else False,
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Health check failed: {e}")
+
+
+@app.patch("/brain/emails/{email_id}/stage")
+async def update_email_pipeline_stage(email_id: str, body: dict):
+    """
+    Move an email through pipeline stages.
+    Body: {"stage": "delegated", "delegated_to": "arjun@astra.ai", "delegated_to_team": "Engineering", "notes": "..."}
+    Valid stages: new, triaged, action_required, delegated, scheduled, replied, done, archived
+    """
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+
+    from agents.email_intelligence import PipelineStage
+
+    new_stage = body.get("stage", "")
+    try:
+        PipelineStage(new_stage)  # validate
+    except ValueError:
+        valid = [s.value for s in PipelineStage]
+        raise HTTPException(400, f"Invalid stage '{new_stage}'. Valid: {valid}")
+
+    updates = {"pipeline_stage": new_stage}
+    if "delegated_to" in body:
+        updates["delegated_to"] = body["delegated_to"]
+    if "delegated_to_team" in body:
+        updates["delegated_to_team"] = body["delegated_to_team"]
+    if "notes" in body:
+        updates["notes"] = body["notes"]
+
+    try:
+        db = _brain_store._db
+        ref = db.collection("scored_emails").document(email_id)
+        await asyncio.to_thread(lambda: ref.update(updates))
+        return {"ok": True, "email_id": email_id, "new_stage": new_stage}
+    except Exception as e:
+        raise HTTPException(500, f"Stage update failed: {e}")
+
+
+@app.get("/brain/emails/{email_id}/detail")
+async def get_email_detail(email_id: str):
+    """Get full detail for a single scored email including scoring breakdown."""
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    try:
+        db = _brain_store._db
+        doc = await asyncio.to_thread(
+            lambda: db.collection("scored_emails").document(email_id).get()
+        )
+        if not doc.exists:
+            raise HTTPException(404, f"Email {email_id} not found")
+        return doc.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Detail fetch failed: {e}")
+
+
+@app.post("/brain/contacts/tier")
+async def update_contact_tier(body: dict):
+    """
+    Add or update a contact's tier in the intelligence database.
+    Body: {"email": "sarah@sequoia.vc", "tier": 1, "name": "Sarah Chen"}
+    Tiers: 1 (VIP), 2 (Active partner), 3 (Known contact)
+    """
+    if not _email_scanner:
+        raise HTTPException(503, "Email intelligence not initialized")
+
+    email = body.get("email", "").strip().lower()
+    tier = body.get("tier", 3)
+    name = body.get("name", "")
+
+    if not email:
+        raise HTTPException(400, "Email address is required")
+    if tier not in (1, 2, 3):
+        raise HTTPException(400, "Tier must be 1, 2, or 3")
+
+    try:
+        contact_db = getattr(_email_scanner, "_contacts", None)
+        if contact_db:
+            contact_db.add_contact(email, tier, name)
+
+            # Persist to Firestore
+            await _save_contact_config()
+
+            return {"ok": True, "email": email, "tier": tier, "name": name}
+        else:
+            raise HTTPException(503, "Contact database not initialized")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Contact tier update failed: {e}")
+
+
+@app.get("/brain/contacts/tiers")
+async def get_contact_tiers():
+    """Get all known contacts organized by tier."""
+    if not _email_scanner:
+        raise HTTPException(503, "Email intelligence not initialized")
+    try:
+        contact_db = getattr(_email_scanner, "_contacts", None)
+        if contact_db:
+            config = contact_db.to_config()
+            # Organize contacts by tier for easy display
+            tier_1 = {e: c["name"] for e, c in config.get("contacts", {}).items() if c["tier"] == 1}
+            tier_2 = {e: c["name"] for e, c in config.get("contacts", {}).items() if c["tier"] == 2}
+            tier_3 = {e: c["name"] for e, c in config.get("contacts", {}).items() if c["tier"] == 3}
+            return {
+                "tier_1": tier_1,
+                "tier_2": tier_2,
+                "tier_3": tier_3,
+                "auto_learned": sorted(config.get("auto_contacts", {}).keys()),
+                "noise_domains": sorted(config.get("noise_domains", [])),
+                "noise_senders": sorted(config.get("noise_senders", [])),
+                "domain_tiers": config.get("domain_tiers", {}),
+            }
+        else:
+            raise HTTPException(503, "Contact database not initialized")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Contact tiers fetch failed: {e}")
+
+
+@app.get("/brain/emails/briefing")
+async def get_email_briefing():
+    """
+    Generate a founder briefing: top action-required emails with key context.
+    Returns a prioritized digest suitable for voice delivery.
+    """
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    try:
+        db = _brain_store._db
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        # Get action-required and high-priority emails
+        # Use client-side sort to avoid needing a composite index
+        try:
+            docs = await asyncio.to_thread(
+                lambda: list(
+                    db.collection("scored_emails")
+                    .where(filter=FieldFilter("pipeline_stage", "==", "action_required"))
+                    .limit(50)
+                    .stream()
+                )
+            )
+            action_emails = sorted(
+                [d.to_dict() for d in docs],
+                key=lambda x: x.get("score", 0),
+                reverse=True,
+            )[:15]
+        except Exception:
+            # Fallback: fetch all and filter client-side
+            docs = await asyncio.to_thread(
+                lambda: list(
+                    db.collection("scored_emails").limit(200).stream()
+                )
+            )
+            all_raw = [d.to_dict() for d in docs]
+            action_emails = sorted(
+                [e for e in all_raw if e.get("pipeline_stage") == "action_required"],
+                key=lambda x: x.get("score", 0),
+                reverse=True,
+            )[:15]
+
+        # Build briefing
+        briefing_items = []
+        for e in action_emails:
+            item = {
+                "priority": e.get("priority", "low"),
+                "sender": e.get("sender", "Unknown"),
+                "subject": e.get("subject", ""),
+                "score": e.get("score", 0),
+                "briefing": e.get("briefing", ""),
+                "action": e.get("action", "review"),
+                "sentiment": e.get("sentiment", "neutral"),
+            }
+            if e.get("draft_reply"):
+                item["has_draft_reply"] = True
+            briefing_items.append(item)
+
+        # Count summary — avoid composite index by fetching without order_by
+        try:
+            all_docs = await asyncio.to_thread(
+                lambda: list(
+                    db.collection("scored_emails").limit(200).stream()
+                )
+            )
+        except Exception:
+            all_docs = []
+        all_emails = [d.to_dict() for d in all_docs]
+        unread = sum(1 for e in all_emails if e.get("is_unread"))
+        critical = sum(1 for e in all_emails if e.get("priority") == "critical")
+        urgent = sum(1 for e in all_emails if e.get("priority") == "urgent")
+
+        return {
+            "summary": {
+                "total_recent": len(all_emails),
+                "unread": unread,
+                "critical": critical,
+                "urgent": urgent,
+                "action_required": len(action_emails),
+            },
+            "action_items": briefing_items,
+            "voice_briefing": _build_voice_briefing(briefing_items, critical, urgent, unread),
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Briefing generation failed: {e}")
+
+
+def _build_voice_briefing(items: list[dict], critical: int, urgent: int, unread: int) -> str:
+    """Build a natural-language briefing for voice delivery."""
+    lines = []
+
+    if critical + urgent == 0 and not items:
+        return "Your inbox is clear — no action-required emails right now."
+
+    lines.append(f"You have {len(items)} emails that need your attention.")
+    if critical:
+        lines.append(f"{critical} are critical priority.")
+    if urgent:
+        lines.append(f"{urgent} are urgent.")
+
+    for i, item in enumerate(items[:5]):
+        sender = item.get("sender", "Someone")
+        subject = item.get("subject", "")[:60]
+        briefing = item.get("briefing", "")
+        if briefing:
+            lines.append(f"{i+1}. From {sender}: {briefing}")
+        else:
+            lines.append(f"{i+1}. From {sender} about \"{subject}\".")
+
+    if len(items) > 5:
+        lines.append(f"Plus {len(items) - 5} more that need review.")
+
+    return " ".join(lines)
+
+
+async def _save_contact_config():
+    """Persist the contact database config to Firestore."""
+    if not _email_scanner or not _brain_store:
+        return
+    contact_db = getattr(_email_scanner, "_contacts", None)
+    if not contact_db:
+        return
+    try:
+        config = contact_db.to_config()
+        config["updated_at"] = time.time()
+        db = _brain_store._db
+        ref = db.collection("config").document(f"contacts_{FOUNDER_ID}")
+        await asyncio.to_thread(lambda: ref.set(config, merge=True))
+    except Exception as e:
+        print(f"[EmailIntelligence] ⚠️ Contact config save failed: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RAG Email Search, Voice-Matched Drafts, Split Inbox, Embed Sync
+# (powered by agents/email_memory.py + agents/voice_drafter.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int = 20
+    rerank_top: int = 5
+    include_sent: bool = True
+
+
+@app.post("/brain/emails/search")
+async def search_emails(req: SearchRequest):
+    """
+    Natural language semantic search across the founder's email history.
+    Uses RAG pipeline: query → embed → vector KNN → re-rank → answer generation.
+    """
+    if not _email_memory:
+        raise HTTPException(503, "Email memory not initialized")
+    try:
+        result = await _email_memory.search_and_answer(
+            query=req.query,
+            top_k=req.top_k,
+            rerank_top=req.rerank_top,
+            include_sent=req.include_sent,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Email search failed: {e}")
+
+
+@app.get("/brain/emails/splits")
+async def get_email_splits():
+    """
+    Get all scored emails organized by split inbox tabs.
+    Returns: {split_name: [emails]} for each tab.
+    """
+    if not _brain_store:
+        raise HTTPException(503, "Brain not initialized")
+    if not _split_inbox:
+        raise HTTPException(503, "Split inbox not initialized")
+    try:
+        db = _brain_store._db
+        docs = await asyncio.to_thread(
+            lambda: list(
+                db.collection("scored_emails")
+                .order_by("processed_at", direction="DESCENDING")
+                .limit(2000)
+                .stream()
+            )
+        )
+        emails = [d.to_dict() for d in docs]
+
+        # Set founder domain for team detection
+        if _email_scanner:
+            scoring = getattr(_email_scanner, "_scoring", None)
+            if scoring and scoring._founder_email:
+                domain = scoring._founder_email.split("@")[-1]
+                _split_inbox.set_founder_domain(domain)
+
+        splits = _split_inbox.categorize_batch(emails)
+
+        # Add counts
+        counts = {name: len(items) for name, items in splits.items()}
+        return {
+            "splits": splits,
+            "counts": counts,
+            "total": len(emails),
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Split inbox fetch failed: {e}")
+
+
+class DraftRequest(BaseModel):
+    recipient_email: str
+    recipient_name: str = ""
+    thread_subject: str = ""
+    thread_body: str = ""
+    instruction: str = ""
+
+
+@app.post("/brain/emails/draft")
+async def generate_draft(req: DraftRequest):
+    """
+    Generate a voice-matched email draft for a specific recipient.
+    Analyzes past sent emails for style matching.
+    """
+    if not _voice_drafter:
+        raise HTTPException(503, "Voice drafter not initialized")
+    try:
+        result = await _voice_drafter.generate_draft(
+            recipient_email=req.recipient_email,
+            recipient_name=req.recipient_name,
+            thread_subject=req.thread_subject,
+            thread_body=req.thread_body,
+            instruction=req.instruction,
+        )
+        return result.to_dict()
+    except Exception as e:
+        raise HTTPException(500, f"Draft generation failed: {e}")
+
+
+@app.get("/brain/emails/style/{contact_email:path}")
+async def get_writing_style(contact_email: str):
+    """
+    Get the founder's writing style profile for a specific contact.
+    Shows formality, tone, avg length, greeting/closing patterns.
+    """
+    if not _voice_drafter:
+        raise HTTPException(503, "Voice drafter not initialized")
+    try:
+        profile = await _voice_drafter.get_style_profile(contact_email)
+        return profile
+    except Exception as e:
+        raise HTTPException(500, f"Style profile fetch failed: {e}")
+
+
+class EmbedSyncRequest(BaseModel):
+    hours_back: int = 87600  # Default: ~10 years (all emails)
+    max_emails: int = 10000  # Max emails per category to fetch
+    batch_size: int = 50     # Emails to fetch details for concurrently
+
+
+@app.post("/brain/emails/embed-sync")
+async def trigger_embed_sync(req: EmbedSyncRequest):
+    """
+    Production-grade email embedding sync.
+    Fetches ALL historical emails and embeds them for semantic search.
+    Supports paginated Gmail fetching for millions of emails.
+    Skips already-embedded emails for efficient incremental sync.
+    """
+    if not _email_memory or not _gmail:
+        raise HTTPException(503, "Email memory or Gmail not initialized")
+    try:
+        from datetime import datetime, timedelta
+
+        # Calculate the date range
+        since_date = datetime.utcnow() - timedelta(hours=req.hours_back)
+        since_str = since_date.strftime("%Y/%m/%d")
+
+        async def fetch_and_embed(query: str, is_sent: bool, max_results: int) -> tuple[int, int]:
+            """Fetch emails in paginated batches and embed them."""
+            messages = await _gmail.list_messages(
+                query=query,
+                max_results=max_results,
+            )
+            total_fetched = len(messages)
+            total_embedded = 0
+
+            # Process in concurrent batches for speed
+            for i in range(0, len(messages), req.batch_size):
+                batch_msgs = messages[i:i + req.batch_size]
+
+                # Fetch full email details concurrently
+                tasks = [_gmail.get_message(m["id"]) for m in batch_msgs]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                emails = []
+                for full in results:
+                    if isinstance(full, Exception) or not full:
+                        continue
+                    email_dict = {
+                        "message_id": full.message_id,
+                        "thread_id": full.thread_id,
+                        "sender": full.sender,
+                        "sender_email": full.sender_email,
+                        "subject": full.subject,
+                        "body": full.body,
+                        "date": full.date,
+                        "timestamp": full.timestamp,
+                    }
+                    if is_sent:
+                        email_dict["to_email"] = getattr(full, "to_email", "") or ""
+                    emails.append(email_dict)
+
+                if emails:
+                    count = await _email_memory.embed_emails(emails, is_sent=is_sent)
+                    total_embedded += count
+
+                # Progress logging every 200 emails
+                processed = min(i + req.batch_size, len(messages))
+                if processed % 200 == 0 or processed == len(messages):
+                    print(f"[EmbedSync] {'Sent' if is_sent else 'Inbox'}: {processed}/{total_fetched} fetched, {total_embedded} embedded")
+
+            return total_fetched, total_embedded
+
+        # Fetch and embed inbox emails (all historical)
+        inbox_fetched, inbox_embedded = await fetch_and_embed(
+            query=f"after:{since_str} -in:sent -in:trash -in:spam",
+            is_sent=False,
+            max_results=req.max_emails,
+        )
+
+        # Fetch and embed sent emails (all historical)
+        sent_fetched, sent_embedded = await fetch_and_embed(
+            query=f"in:sent after:{since_str}",
+            is_sent=True,
+            max_results=min(req.max_emails, 5000),
+        )
+
+        stats = await _email_memory.get_embed_stats()
+
+        return {
+            "inbox_fetched": inbox_fetched,
+            "inbox_embedded": inbox_embedded,
+            "sent_fetched": sent_fetched,
+            "sent_embedded": sent_embedded,
+            "total_fetched": inbox_fetched + sent_fetched,
+            "total_embedded": inbox_embedded + sent_embedded,
+            "stats": stats,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Embed sync failed: {e}")
+
+
+@app.get("/brain/emails/embed-stats")
+async def get_embed_stats():
+    """Get embedding pipeline statistics."""
+    if not _email_memory:
+        raise HTTPException(503, "Email memory not initialized")
+    try:
+        stats = await _email_memory.get_embed_stats()
+        return stats
+    except Exception as e:
+        raise HTTPException(500, f"Embed stats fetch failed: {e}")
+
+
+class SplitMoveRequest(BaseModel):
+    message_id: str
+    sender_email: str = ""
+    target_split: str
+
+
+@app.post("/brain/emails/split-move")
+async def record_split_move(req: SplitMoveRequest):
+    """
+    Record a manual split move (founder moved email to different tab).
+    After 3 consistent moves from same sender, auto-learns the rule.
+    """
+    if not _split_inbox:
+        raise HTTPException(503, "Split inbox not initialized")
+    try:
+        _split_inbox.record_manual_move(
+            message_id=req.message_id,
+            sender_email=req.sender_email,
+            target_split=req.target_split,
+        )
+        return {
+            "moved": True,
+            "learned_rules": _split_inbox.get_learned_rules(),
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Split move failed: {e}")
 
 
 # ─────────────────────────────────────────────

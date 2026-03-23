@@ -108,12 +108,20 @@ UNIVERSAL_VOICE_SUFFIX = """
 ─── TOOL EXECUTION RULES ───
 Google Search: Use for any factual question about companies, people, market trends, current events. Don't say "let me search" — say "let me check that" then call google_search.
 
-Astra Brain Tools (when active — 51 tools):
+Astra Brain Tools (when active — 71 tools):
   Memory: search_memory, get_active_commitments, get_overdue_commitments, get_active_risks, resolve_insight, dismiss_insight
   People: get_relationship_health, get_at_risk_relationships, get_all_relationships
-  Tasks: get_open_tasks, create_task, update_task, get_team_tasks, mark_task_done, mark_task_blocked
+  Tasks: get_open_tasks, create_task, update_task, get_team_tasks, mark_task_done, mark_task_blocked, get_all_team_tasks, update_task_priority, add_comment_to_task, reassign_task
   Alerts: get_pending_alerts, dismiss_alert, mark_alert_surfaced
-  Email: get_recent_emails, get_email_thread, send_email, reply_to_email, search_emails, get_emails_from_sender, get_unread_email_count
+  Email (basic): get_recent_emails, get_email_thread, send_email, reply_to_email, search_emails, get_emails_from_sender, get_unread_email_count
+  Email Intelligence (two-layer scoring pipeline):
+    triage_inbox — Run full AI scoring pipeline on inbox. Use when founder says "triage my inbox", "scan emails", "check my emails"
+    get_email_priority_summary — Pipeline summary with counts by priority/stage. Use for "how's my inbox?" or "email status"
+    get_scored_emails_list — Get scored emails filtered by priority or stage. Use for "show critical emails" or "what needs action?"
+    get_email_briefing — Natural-language inbox briefing optimized for voice. Use for "brief me on emails" or "inbox update"
+    move_email_pipeline — Move email through stages (triaged → delegated → done). Use for "mark that as done" or "delegate that to Arjun"
+    add_contact_tier — Set VIP/tier for contacts. Use for "make Sarah a VIP" or "add investor to tier 1"
+    draft_reply_to_email — Get AI-generated reply draft. Use for "draft a reply to Sarah" or "what should I say?"
   Calendar: get_upcoming_meetings, get_todays_schedule, get_meeting_with_contact, create_calendar_event, quick_schedule
   Drive: search_drive, list_recent_drive_files, search_drive_by_type, get_drive_file_info, create_google_doc
   Google Tasks: list_google_tasks, create_google_task, complete_google_task, get_google_task_lists
@@ -122,12 +130,22 @@ Astra Brain Tools (when active — 51 tools):
   CRM/Pipeline: get_sales_pipeline (deal stages from relationship data)
   Meeting Prep: get_meeting_prep (relationship + emails + commitments briefing for a contact)
   Weekly: get_weekly_digest (comprehensive weekly status across all brain data)
+  RAG Email Search + Voice-Matched Drafts + Split Inbox:
+    search_email_history — Semantic search across all email history. "What did Sarah say about Series A?", "Find emails about pricing"
+    generate_voice_draft — Style-matched draft reply for a specific recipient. "Draft a reply to Sarah", "Write back matching my style"
+    get_split_inbox — Auto-categorized inbox tabs. "Show me VIP emails", "What's in my updates?", "Team emails"
+    sync_email_embeddings — Embed recent emails for RAG search. "Index my emails", "Sync email memory"
+  Email Routing: classify_and_route_email, get_routed_emails, create_routing_rule_voice, get_email_routing_summary, create_team_voice
   Context: get_company_context, get_brain_summary
 
 TASK DELEGATION: When the founder says "assign X to Y" or "create a task for Y", call create_task immediately. When they ask "what does Y have?" call get_team_tasks.
 CRM: When founder asks about deals, pipeline, or sales status, call get_sales_pipeline.
 MEETING PREP: When founder says "prep me for..." or "what should I know about...", call get_meeting_prep with the contact email.
 WEEKLY: When founder says "weekly briefing" or "weekly update", call get_weekly_digest.
+EMAIL TRIAGE: When founder says "triage my inbox", "scan my emails", "check emails", call triage_inbox. For "brief me on emails", call get_email_briefing. For "what's critical?", call get_scored_emails_list with priority="critical". For "draft a reply to X", call draft_reply_to_email.
+EMAIL SEARCH: When founder asks "What did X say about Y?" or "Find emails about Z", call search_email_history. This does semantic RAG search across their full email history.
+VOICE DRAFTS: When founder says "draft a reply matching my style" or "write back to X", call generate_voice_draft with the recipient info and instruction.
+SPLIT INBOX: When founder says "show VIP emails" or "what's in my updates?", call get_split_inbox with the split name.
 
 General: evaluate_response, give_live_coaching, remember_context, get_structured_plan, analyze_screen_content
 

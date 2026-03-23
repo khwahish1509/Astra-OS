@@ -62,7 +62,7 @@ Every startup founder drowns in context-switching: 50 unread emails, 6 meetings,
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  GeminiLiveBridge — Real-time voice session manager          │   │
 │  │  • Proxies browser audio ↔ Gemini Live API                  │   │
-│  │  • Dispatches 60 ADK FunctionTools during live stream       │   │
+│  │  • Dispatches 67 ADK FunctionTools during live stream       │   │
 │  │  • Routes transcript events to browser                       │   │
 │  │  • Post-session summarization → long-term memory            │   │
 │  └──────────────────────────────────────────────────────────────┘   │
@@ -108,7 +108,7 @@ Every startup founder drowns in context-switching: 50 unread emails, 6 meetings,
 | Requirement | How We Satisfy It |
 |---|---|
 | Leverage a Gemini model | Gemini 2.5 Flash Native Audio (Live API) — the core of everything |
-| Google GenAI SDK or ADK | Both: `google-genai` for Live API + `google-adk` for 60 FunctionTools |
+| Google GenAI SDK or ADK | Both: `google-genai` for Live API + `google-adk` for 67 FunctionTools |
 | Google Cloud service | Cloud Run (hosting) + Cloud Build (CI/CD) + Firestore (vector search + memory) + Secret Manager |
 | Live Agents | Real-time bidirectional PCM16 audio + camera vision + barge-in + 3 concurrent agents |
 
@@ -131,7 +131,7 @@ Every startup founder drowns in context-switching: 50 unread emails, 6 meetings,
 | Layer | Technology |
 |---|---|
 | **LLM + Voice** | Gemini 2.5 Flash Native Audio (Live API) |
-| **Agent Framework** | Google ADK — 60 FunctionTools, 3 concurrent agents |
+| **Agent Framework** | Google ADK — 67 FunctionTools, 3 concurrent agents |
 | **Embeddings** | text-embedding-004, 768 dimensions, cosine similarity |
 | **Backend** | Python FastAPI + google-genai SDK |
 | **Frontend** | React 18 + Vite (custom SVG avatar, dark/light theme) |
@@ -337,7 +337,7 @@ astracoach/
 │   ├── session_store.py                # In-memory session state management
 │   ├── agent_tools.py                  # ADK agent configuration + tool registry
 │   ├── agents/
-│   │   ├── brain_tools.py              # 60 ADK FunctionTools (voice-callable)
+│   │   ├── brain_tools.py              # 67 ADK FunctionTools (voice-callable)
 │   │   └── background.py              # EmailScanner + RiskMonitor background agents
 │   ├── brain/
 │   │   ├── models.py                   # Pydantic models (insights, tasks, alerts, teams)
