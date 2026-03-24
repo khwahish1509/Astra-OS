@@ -1277,7 +1277,7 @@ class EmailIntelligencePipeline:
                 lambda: list(
                     db.collection("scored_emails")
                     .order_by("processed_at", direction="DESCENDING")
-                    .limit(200)
+                    .limit(10000)
                     .stream()
                 )
             )

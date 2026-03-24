@@ -69,7 +69,7 @@ CREDENTIALS_PATH    = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
 TOKEN_PATH          = os.getenv("GMAIL_TOKEN_PATH", "gmail_token.json")
 FOUNDER_ID          = os.getenv("FOUNDER_ID", "default_founder")
 APP_NAME            = "astra_coach"  # must match gemini_session.APP_NAME
-EMAIL_SCAN_INTERVAL = int(os.getenv("EMAIL_SCAN_INTERVAL_MINUTES", "15"))
+EMAIL_SCAN_INTERVAL = int(os.getenv("EMAIL_SCAN_INTERVAL_MINUTES", "2"))
 RISK_CHECK_INTERVAL = int(os.getenv("RISK_CHECK_INTERVAL_MINUTES", "30"))
 
 # Avatar generation model — confirmed working high-fidelity image models
@@ -1848,12 +1848,57 @@ async def seed_demo_data():
 # Email Intelligence API  (powered by agents/email_intelligence.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.get("/brain/emails/new-count")
+async def email_new_count():
+    """Ultra-fast endpoint — returns count of emails by stage + last scan time.
+    Used by frontend for real-time polling every 10 seconds."""
+    if not _brain_store:
+        return {"total": 0, "unread": 0, "action_required": 0, "last_scan": None}
+    try:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        db = _brain_store._db
+
+        # Fast count query
+        col = db.collection("scored_emails").document(FOUNDER_ID).collection("emails")
+
+        # Count action_required
+        action_docs = await asyncio.to_thread(
+            lambda: list(col.where(filter=FieldFilter("pipeline_stage", "==", "action_required")).limit(1000).stream())
+        )
+
+        # Count unread (triaged stage = needs attention)
+        triaged_docs = await asyncio.to_thread(
+            lambda: list(col.where(filter=FieldFilter("pipeline_stage", "==", "triaged")).limit(1000).stream())
+        )
+
+        # Total docs count
+        total_docs = await asyncio.to_thread(
+            lambda: list(col.limit(1).stream())
+        )
+
+        scanner_status = None
+        if _email_scanner:
+            scanner_status = {
+                "running": _email_scanner._running,
+                "last_history_id": getattr(_email_scanner, '_last_history_id', None),
+                "last_full_scan": getattr(_email_scanner, '_last_full_scan', 0),
+            }
+
+        return {
+            "action_required": len(action_docs),
+            "triaged": len(triaged_docs),
+            "scanner": scanner_status,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/brain/emails/scored")
 async def get_scored_emails(
     priority: Optional[str] = None,
     stage: Optional[str] = None,
     category: Optional[str] = None,
-    limit: int = 50,
+    limit: int = 10000,
     offset: int = 0,
 ):
     """
@@ -1923,7 +1968,7 @@ async def get_email_pipeline_summary():
             lambda: list(
                 db.collection("scored_emails")
                 .order_by("processed_at", direction="DESCENDING")
-                .limit(200)
+                .limit(10000)
                 .stream()
             )
         )
@@ -1957,7 +2002,7 @@ async def get_email_pipeline_summary():
 
 
 @app.post("/brain/emails/intelligence-scan")
-async def trigger_intelligence_scan(hours_back: int = 87600, max_fetch: int = 5000):
+async def trigger_intelligence_scan(hours_back: int = 87600, max_fetch: int = 10000):
     """
     Trigger a full email intelligence scan (scoring + classification + dedup).
     This runs the complete two-layer pipeline, not just insight extraction.
@@ -1988,6 +2033,70 @@ async def trigger_intelligence_scan(hours_back: int = 87600, max_fetch: int = 50
         }
     except Exception as e:
         raise HTTPException(500, f"Intelligence scan failed: {e}")
+
+
+@app.post("/brain/emails/reclassify")
+async def reclassify_emails():
+    """
+    Re-run rules-based category classification on all existing scored emails.
+    Fixes emails stuck with category='unknown' from before the classifier was added.
+    """
+    if not _brain_store or not _email_scanner:
+        raise HTTPException(503, "Brain not initialized")
+    try:
+        db = _brain_store._db
+        docs = await asyncio.to_thread(
+            lambda: list(db.collection("scored_emails").limit(50000).stream())
+        )
+        updated = 0
+        pipeline = _email_scanner.pipeline
+        batch = db.batch()
+        batch_count = 0
+        for doc in docs:
+            data = doc.to_dict()
+            if data.get("category", "unknown") != "unknown":
+                continue  # already classified
+
+            # Build a minimal EmailMessage-like object for the classifier
+            class _MiniEmail:
+                def __init__(self, d):
+                    self.sender_email = d.get("sender_email", "")
+                    self.subject = d.get("subject", "")
+                    self.body = d.get("snippet", "")
+                    self.thread_id = d.get("thread_id", "")
+
+            from agents.email_intelligence import ScoringBreakdown
+            mini = _MiniEmail(data)
+            bd = ScoringBreakdown()
+            bd.noise_reason = data.get("scoring_breakdown", {}).get("noise", {}).get("reason", "")
+            bd.founder_replied_boost = data.get("scoring_breakdown", {}).get("founder_replied", 0)
+
+            new_cat = pipeline._classify_category_rules(mini, bd)
+            new_action = pipeline._determine_action_rules(
+                data.get("priority", "low"), new_cat, mini, bd
+            )
+
+            ref = db.collection("scored_emails").document(data["message_id"])
+            batch.update(ref, {
+                "category": new_cat.value if hasattr(new_cat, 'value') else str(new_cat),
+                "action": new_action.value if hasattr(new_action, 'value') else str(new_action),
+            })
+            updated += 1
+            batch_count += 1
+
+            if batch_count >= 400:
+                await asyncio.to_thread(batch.commit)
+                batch = db.batch()
+                batch_count = 0
+
+        if batch_count > 0:
+            await asyncio.to_thread(batch.commit)
+
+        return {"reclassified": updated, "total": len(docs)}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Reclassification failed: {e}")
 
 
 @app.get("/brain/emails/health")
@@ -2045,8 +2154,9 @@ async def update_email_pipeline_stage(email_id: str, body: dict):
 
 
 @app.get("/brain/emails/{email_id}/detail")
-async def get_email_detail(email_id: str):
-    """Get full detail for a single scored email including scoring breakdown."""
+async def get_email_detail(email_id: str, include_body: bool = True):
+    """Get full detail for a single scored email including scoring breakdown.
+    If include_body=True, also fetches the full email body from Gmail."""
     if not _brain_store:
         raise HTTPException(503, "Brain not initialized")
     try:
@@ -2056,7 +2166,18 @@ async def get_email_detail(email_id: str):
         )
         if not doc.exists:
             raise HTTPException(404, f"Email {email_id} not found")
-        return doc.to_dict()
+        data = doc.to_dict()
+
+        # Fetch full body from Gmail if requested and available
+        if include_body and _gmail and _gmail.is_authenticated():
+            try:
+                email_msg = await _gmail._fetch_message(email_id)
+                if email_msg and email_msg.body:
+                    data["body"] = email_msg.body[:5000]  # Cap at 5000 chars
+            except Exception:
+                pass  # Body fetch is best-effort
+
+        return data
     except HTTPException:
         raise
     except Exception as e:
@@ -2161,7 +2282,7 @@ async def get_email_briefing():
             # Fallback: fetch all and filter client-side
             docs = await asyncio.to_thread(
                 lambda: list(
-                    db.collection("scored_emails").limit(200).stream()
+                    db.collection("scored_emails").limit(10000).stream()
                 )
             )
             all_raw = [d.to_dict() for d in docs]
@@ -2191,7 +2312,7 @@ async def get_email_briefing():
         try:
             all_docs = await asyncio.to_thread(
                 lambda: list(
-                    db.collection("scored_emails").limit(200).stream()
+                    db.collection("scored_emails").limit(10000).stream()
                 )
             )
         except Exception:
@@ -2312,7 +2433,7 @@ async def get_email_splits():
             lambda: list(
                 db.collection("scored_emails")
                 .order_by("processed_at", direction="DESCENDING")
-                .limit(2000)
+                .limit(10000)
                 .stream()
             )
         )

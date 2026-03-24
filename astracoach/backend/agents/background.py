@@ -121,6 +121,12 @@ class EmailScannerAgent:
         self._initialized = False
         self._scan_lock = asyncio.Lock()  # Prevent concurrent scans
 
+        # ── Incremental sync via History API ──────────────────────────────
+        self._last_history_id = None
+        self._full_scan_interval = 6 * 3600  # Full scan every 6 hours
+        self._fast_interval = 60  # History check every 60 seconds
+        self._last_full_scan = 0
+
     # ── Public accessors ──────────────────────────────────────────────────
 
     @property
@@ -223,30 +229,41 @@ class EmailScannerAgent:
     # ── Main loop ─────────────────────────────────────────────────────────
 
     async def _scan_loop(self) -> None:
-        """Run scan every interval. First scan covers full mailbox history (~10 years)."""
+        """Run fast incremental sync every 60 seconds, full scan every 6 hours."""
         first_run = True
         while self._running:
             try:
                 if self._scan_lock.locked():
-                    print("[EmailScanner] ⏳ Scan already running (manual trigger?) — waiting for next interval")
-                    await asyncio.sleep(self._interval)
+                    await asyncio.sleep(self._fast_interval)
                     continue
 
                 async with self._scan_lock:
-                    # First run: sweep entire mailbox history (87600h ≈ 10 years)
-                    # Subsequent runs: last 6 hours to catch new arrivals
-                    hours = 87600 if first_run else 6
-                    max_emails = 5000 if first_run else 200
-                    result = await self._scan(hours_back=hours, max_fetch=max_emails)
-                    print(f"[EmailScanner] ✅ Scan complete — {result.get('emails_scored', 0)} scored, "
-                          f"{result.get('insights_extracted', 0)} insights")
-                    first_run = False
+                    now = time.time()
+                    needs_full = first_run or (now - self._last_full_scan > self._full_scan_interval)
+
+                    if needs_full:
+                        hours = 87600 if first_run else 6
+                        max_emails = 10000 if first_run else 1000
+                        result = await self._scan(hours_back=hours, max_fetch=max_emails)
+                        # Get initial history ID after full scan
+                        try:
+                            profile = await self._gmail.get_profile()
+                            self._last_history_id = str(profile.get("historyId", ""))
+                            print(f"[EmailScanner] 📌 History ID set: {self._last_history_id}")
+                        except Exception as e:
+                            print(f"[EmailScanner] ⚠️ Failed to get historyId: {e}")
+                        self._last_full_scan = now
+                        first_run = False
+                        print(f"[EmailScanner] ✅ Full scan: {result.get('emails_scored', 0)} scored")
+                    elif self._last_history_id:
+                        # Fast incremental sync via History API
+                        result = await self._fast_sync()
+                        if result.get("new_emails", 0) > 0:
+                            print(f"[EmailScanner] ⚡ Fast sync: {result['new_emails']} new emails")
             except Exception as e:
-                should_alert = self._health.record_failure(str(e))
-                print(f"[EmailScanner] ❌ Scan failed: {e}")
-                if should_alert:
-                    await self._create_scanner_alert(str(e))
-            await asyncio.sleep(self._interval)
+                self._health.record_failure(str(e))
+                print(f"[EmailScanner] ❌ Error: {e}")
+            await asyncio.sleep(self._fast_interval)
 
     async def _scan(self, hours_back: int = 1, max_fetch: int = 200) -> dict:
         """
@@ -358,6 +375,52 @@ class EmailScannerAgent:
             "insights_extracted": total_insights,
             "by_priority": priority_counts,
         }
+
+    async def _fast_sync(self) -> dict:
+        """Use Gmail History API for near-real-time email detection."""
+        await self._initialize()
+
+        try:
+            new_emails, new_history_id = await self._gmail.get_new_emails_since(self._last_history_id)
+            self._last_history_id = new_history_id
+        except Exception as e:
+            # historyId expired — need full resync
+            if "404" in str(e) or "historyId" in str(e).lower():
+                print("[EmailScanner] ⚠️ History ID expired — scheduling full resync")
+                self._last_full_scan = 0  # Force full scan next loop
+            else:
+                print(f"[EmailScanner] ⚠️ Fast sync failed: {e}")
+            return {"new_emails": 0}
+
+        if not new_emails:
+            return {"new_emails": 0}
+
+        # Process new emails through the intelligence pipeline
+        batch_thread_ids = list({e.thread_id for e in new_emails if e.thread_id})
+        batch_message_ids = [e.message_id for e in new_emails]
+
+        try:
+            thread_meta, msg_meta = await asyncio.gather(
+                self._gmail.get_thread_metadata(batch_thread_ids),
+                self._gmail.get_message_metadata(batch_message_ids),
+            )
+        except:
+            thread_meta, msg_meta = {}, {}
+
+        thread_depths = {tid: meta.get("depth", 1) for tid, meta in thread_meta.items()}
+        attachment_map = {mid: meta.get("has_attachment", False) for mid, meta in msg_meta.items()}
+        cc_map = {mid: meta.get("cc_emails", []) for mid, meta in msg_meta.items()}
+        importance_map = {mid: meta.get("importance", False) for mid, meta in msg_meta.items()}
+
+        scored = await self._pipeline.process_emails(
+            new_emails,
+            thread_depths=thread_depths,
+            attachment_map=attachment_map,
+            cc_map=cc_map,
+            importance_map=importance_map,
+        )
+
+        return {"new_emails": len(scored), "history_id": new_history_id}
 
     async def _save_contact_config(self) -> None:
         """Persist contact database config to Firestore."""

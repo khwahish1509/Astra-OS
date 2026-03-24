@@ -10,6 +10,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTheme } from '../ThemeContext'
 
 const POLL_INTERVAL = 30000
+const FAST_POLL_INTERVAL = 8000  // 8s polling when viewing email
 
 // ── Client-side fallback demo data ──────────────────────────────────────────
 // Used when Firestore is not connected or backend returns empty.
@@ -173,6 +174,9 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
   const [syncing, setSyncing] = useState(false)
 
   const timerRef = useRef(null)
+  const fastTimerRef = useRef(null)
+  const [newEmailCount, setNewEmailCount] = useState(0)
+  const [showEmailBody, setShowEmailBody] = useState(false)
 
   const { theme: T } = useTheme()
   const S = getStyles(T)
@@ -192,7 +196,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
         fetch(`${backendUrl}/brain/memory/episodes?limit=10`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/memory/events?limit=20`).then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(`${backendUrl}/brain/memory/status`).then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch(`${backendUrl}/brain/emails/scored?limit=500`).then(r => r.ok ? r.json() : {emails:[]}).catch(() => ({emails:[]})),
+        fetch(`${backendUrl}/brain/emails/scored?limit=10000`).then(r => r.ok ? r.json() : {emails:[]}).catch(() => ({emails:[]})),
         fetch(`${backendUrl}/brain/emails/pipeline`).then(r => r.ok ? r.json() : null).catch(() => null),
         fetch(`${backendUrl}/brain/emails/health`).then(r => r.ok ? r.json() : null).catch(() => null),
         fetch(`${backendUrl}/brain/contacts/tiers`).then(r => r.ok ? r.json() : null).catch(() => null),
@@ -253,6 +257,35 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
     timerRef.current = setInterval(fetchAll, POLL_INTERVAL)
     return () => clearInterval(timerRef.current)
   }, [fetchAll])
+
+  // Fast polling when on email view — checks for new emails every 8s
+  useEffect(() => {
+    if (activeView !== 'email') {
+      if (fastTimerRef.current) clearInterval(fastTimerRef.current)
+      return
+    }
+    const fastPoll = async () => {
+      try {
+        const res = await fetch(`${backendUrl}/brain/emails/new-count`)
+        if (res.ok) {
+          const data = await res.json()
+          setNewEmailCount(data.action_required || 0)
+        }
+      } catch {}
+      // Also refresh splits data quietly
+      try {
+        const splitRes = await fetch(`${backendUrl}/brain/emails/splits`)
+        if (splitRes.ok) setSplitData(await splitRes.json())
+        const scoredRes = await fetch(`${backendUrl}/brain/emails/scored?limit=10000`)
+        if (scoredRes.ok) {
+          const d = await scoredRes.json()
+          setScoredEmails(d?.emails || [])
+        }
+      } catch {}
+    }
+    fastTimerRef.current = setInterval(fastPoll, FAST_POLL_INTERVAL)
+    return () => clearInterval(fastTimerRef.current)
+  }, [activeView, backendUrl])
 
   // Add animation styles
   useEffect(() => {
@@ -350,6 +383,19 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
         .astra-scroll::-webkit-scrollbar-track { background: transparent; }
         .astra-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
         .astra-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+
+        /* Responsive: hide split rail on small screens, shrink email list */
+        @media (max-width: 1100px) {
+          .astra-split-rail { display: none !important; }
+          .astra-email-list { flex: 0 0 280px !important; }
+        }
+        @media (max-width: 900px) {
+          .astra-email-list { flex: 0 0 240px !important; }
+        }
+        @media (max-width: 700px) {
+          .astra-email-list { flex: 1 !important; }
+          .astra-detail-panel { display: none !important; }
+        }
       `
       document.head.appendChild(style)
     }
@@ -556,7 +602,9 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
       setScanning(true)
       try {
         await fetch(`${backendUrl}/brain/emails/intelligence-scan`, { method: 'POST' })
-        // Also fetch splits
+        // Re-classify old "unknown" emails with new rules-based categories
+        await fetch(`${backendUrl}/brain/emails/reclassify`, { method: 'POST' }).catch(() => {})
+        // Fetch fresh data
         const splitRes = await fetch(`${backendUrl}/brain/emails/splits`)
         if (splitRes.ok) setSplitData(await splitRes.json())
         await fetchAll()
@@ -641,6 +689,39 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
     // Load splits on mount if not loaded
     if (!splitData && scoredEmails.length > 0) fetchSplits()
 
+    // Keyboard shortcuts for email navigation (Superhuman-style)
+    const handleKeyDown = (e) => {
+      // Don't capture if user is typing in an input/textarea
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return
+      const emails = currentSplitEmails.length > 0 ? currentSplitEmails : filteredScored
+      if (e.key === 'j' || e.key === 'ArrowDown') {
+        e.preventDefault()
+        const next = Math.min(selectedEmailIdx + 1, emails.length - 1)
+        setSelectedEmailIdx(next)
+        if (emails[next]) loadDetail(emails[next].message_id)
+        setDraftResult(null)
+      } else if (e.key === 'k' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const prev = Math.max(selectedEmailIdx - 1, 0)
+        setSelectedEmailIdx(prev)
+        if (emails[prev]) loadDetail(emails[prev].message_id)
+        setDraftResult(null)
+      } else if (e.key === 'r' && emailDetail) {
+        e.preventDefault()
+        if (emails[selectedEmailIdx]) handleDraft(emails[selectedEmailIdx])
+      } else if (e.key === 'a' && emailDetail) {
+        e.preventDefault()
+        moveStage(emailDetail.message_id || emailDetailId, 'archived')
+      } else if (e.key === 'e' && emailDetail) {
+        e.preventDefault()
+        setShowEmailBody(prev => !prev)
+      } else if (e.key === 'Escape') {
+        setEmailDetailId(null)
+        setEmailDetail(null)
+        setShowEmailBody(false)
+      }
+    }
+
     const priorityColor = (p) => {
       if (p === 'critical') return T.danger
       if (p === 'urgent') return T.warning
@@ -653,6 +734,7 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
 
     // Split tab config
     const splitTabs = [
+      { id: 'all', label: 'All Mail', color: T.accentCyan, icon: '\u2709' },
       { id: 'action_required', label: 'Action', color: T.danger, icon: '!' },
       { id: 'vip', label: 'VIP', color: '#3b82f6', icon: '\u2605' },
       { id: 'team', label: 'Team', color: T.accentPurple, icon: '\u2302' },
@@ -662,14 +744,22 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
       { id: 'done', label: 'Done', color: T.success, icon: '\u2713' },
     ]
 
-    const currentSplitEmails = splitData?.splits?.[activeSplit] || []
-    const splitCounts = splitData?.counts || {}
+    // Sort helper — newest first by timestamp (epoch seconds) then by date string fallback
+    const sortByTime = (arr) => [...arr].sort((a, b) => {
+      const tA = a.timestamp || new Date(a.date || 0).getTime() / 1000
+      const tB = b.timestamp || new Date(b.date || 0).getTime() / 1000
+      return tB - tA
+    })
 
-    const filteredScored = scoredEmails.filter(e => {
+    // "All Mail" shows every scored email unfiltered; other tabs use split data
+    const currentSplitEmails = sortByTime(activeSplit === 'all' ? scoredEmails : (splitData?.splits?.[activeSplit] || []))
+    const splitCounts = { ...(splitData?.counts || {}), all: scoredEmails.length }
+
+    const filteredScored = sortByTime(scoredEmails.filter(e => {
       if (emailPriorityFilter && e.priority !== emailPriorityFilter) return false
       if (emailStageFilter && e.pipeline_stage !== emailStageFilter) return false
       return true
-    })
+    }))
 
     // Helper: Format relative time
     const relativeTime = (dateStr) => {
@@ -689,29 +779,50 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
     }
 
     return (
-      <div style={{
-        display: 'flex', flexDirection: 'column', height: '100%',
-        background: T.bg, overflow: 'hidden',
-      }}>
+      <div
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        style={{
+          display: 'flex', flexDirection: 'column', height: '100%',
+          background: T.bg, overflow: 'hidden', outline: 'none',
+        }}
+      >
         {/* ═══ HEADER ═══ */}
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          padding: '16px 24px', flexShrink: 0,
+          padding: '12px 20px', flexShrink: 0,
           borderBottom: `1px solid ${T.border}`,
           background: T.bgElevated,
         }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-            <h1 style={{
-              fontSize: 20, fontWeight: 800, margin: 0,
-              background: T.gradientPrimary,
-              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text', letterSpacing: '-0.02em',
-            }}>
-              Email Intelligence
-            </h1>
-            <span style={{ fontSize: 11, color: T.textDim, fontWeight: 500 }}>
-              Split Inbox · RAG Search · Voice Drafts
-            </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 10,
+                background: 'linear-gradient(135deg, rgba(6,182,212,0.15), rgba(139,92,246,0.15))',
+                border: '1px solid rgba(6,182,212,0.2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 16,
+              }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.accentCyan} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/>
+                </svg>
+              </div>
+              <div>
+                <h1 style={{
+                  fontSize: 16, fontWeight: 700, margin: 0,
+                  color: T.text, letterSpacing: '-0.02em',
+                }}>
+                  Inbox
+                </h1>
+                <span style={{ fontSize: 10, color: T.textDim, fontWeight: 400, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{
+                    width: 5, height: 5, borderRadius: '50%', background: '#22c55e',
+                    animation: 'breathe 2s ease-in-out infinite', flexShrink: 0,
+                  }} />
+                  Live sync · {scoredEmails.length} emails tracked
+                </span>
+              </div>
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {scannerHealth && (
@@ -916,13 +1027,13 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {/* ── SPLITS TAB ── */}
           {emailIntelTab === 'splits' && (
-            <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+            <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
 
-              {/* LEFT: SPLIT RAIL — Full rounded highlight + wider */}
-              <div style={{
-                flex: '0 0 160px', display: 'flex', flexDirection: 'column',
+              {/* LEFT: SPLIT RAIL */}
+              <div className="astra-split-rail" style={{
+                flex: '0 0 150px', display: 'flex', flexDirection: 'column',
                 borderRight: `1px solid ${T.border}`, background: T.bgPanel,
-                padding: '10px 8px',
+                padding: '10px 6px',
               }}>
                 {splitTabs.map((st, i) => {
                   const isActive = activeSplit === st.id
@@ -933,9 +1044,9 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                       onClick={() => { setActiveSplit(st.id); setSelectedEmailIdx(0); setDraftResult(null) }}
                       className="astra-split-btn"
                       style={{
-                        display: 'flex', alignItems: 'center', gap: 9,
-                        padding: '10px 12px', borderRadius: 10, border: 'none', cursor: 'pointer',
-                        fontSize: 12, fontWeight: isActive ? 700 : 500,
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '8px 10px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                        fontSize: 11, fontWeight: isActive ? 700 : 500,
                         background: isActive ? `${st.color}20` : 'transparent',
                         color: isActive ? st.color : T.textMuted,
                         transition: 'all 0.15s ease',
@@ -989,11 +1100,11 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                 </div>
               </div>
 
-              {/* CENTER: EMAIL LIST — Superhuman-inspired redesign */}
-              <div style={{
-                flex: '0 0 400px', display: 'flex', flexDirection: 'column',
+              {/* CENTER: EMAIL LIST */}
+              <div className="astra-email-list" style={{
+                flex: '0 0 340px', display: 'flex', flexDirection: 'column',
                 borderRight: `1px solid ${T.border}`, background: T.bgCard,
-                minHeight: 0,
+                minHeight: 0, minWidth: 0,
               }}>
                 {(() => {
                   const emails = currentSplitEmails.length > 0 ? currentSplitEmails : filteredScored
@@ -1038,11 +1149,11 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                               onClick={() => { setSelectedEmailIdx(idx); loadDetail(email.message_id); setDraftResult(null) }}
                               className={isSelected ? '' : 'astra-email-row'}
                               style={{
-                                padding: '12px 14px', cursor: 'pointer',
+                                padding: '10px 12px', cursor: 'pointer',
                                 borderBottom: `1px solid ${T.borderSubtle}`,
                                 background: isSelected ? `${T.accentCyan}0a` : 'transparent',
                                 borderLeft: `3px solid ${isSelected ? T.accentCyan : priorityColor(email.priority)}`,
-                                transition: 'all 0.15s ease',
+                                transition: 'all 0.12s ease',
                               }}
                             >
                               {/* Top row: sender name + timestamp */}
@@ -1089,24 +1200,36 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                                 </div>
                               )}
 
-                              {/* Priority indicator + category tags */}
-                              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                                {email.category && (
+                              {/* Category + action tags — only show meaningful ones */}
+                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                {email.category && email.category !== 'unknown' && (
                                   <span style={{
-                                    fontSize: 9, fontWeight: 600, padding: '2px 6px', borderRadius: 3,
-                                    background: 'rgba(139,92,246,0.12)', color: T.accentPurple,
-                                    textTransform: 'uppercase',
+                                    fontSize: 9, fontWeight: 600, padding: '2px 7px', borderRadius: 10,
+                                    background: email.category === 'newsletter' ? 'rgba(107,114,128,0.12)' :
+                                               email.category === 'hiring' ? 'rgba(245,158,11,0.1)' :
+                                               email.category === 'notification' ? 'rgba(107,114,128,0.1)' :
+                                               email.category === 'investor' ? 'rgba(59,130,246,0.12)' :
+                                               email.category === 'customer' ? 'rgba(16,185,129,0.12)' :
+                                               email.category === 'internal' ? 'rgba(139,92,246,0.12)' :
+                                               'rgba(139,92,246,0.08)',
+                                    color: email.category === 'newsletter' ? T.textMuted :
+                                           email.category === 'hiring' ? '#f59e0b' :
+                                           email.category === 'notification' ? T.textMuted :
+                                           email.category === 'investor' ? '#3b82f6' :
+                                           email.category === 'customer' ? '#10b981' :
+                                           email.category === 'internal' ? T.accentPurple :
+                                           T.accentPurple,
+                                    letterSpacing: '0.02em',
                                   }}>
                                     {email.category}
                                   </span>
                                 )}
-                                {(email.pipeline_stage === 'action_required') && (
+                                {email.score >= 7 && (
                                   <span style={{
-                                    fontSize: 8, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
-                                    background: T.dangerSoft, color: T.danger,
-                                    textTransform: 'uppercase',
+                                    fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
+                                    background: 'rgba(239,68,68,0.08)', color: '#ef4444',
                                   }}>
-                                    Action
+                                    {email.score}/10
                                   </span>
                                 )}
                               </div>
@@ -1128,320 +1251,477 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                 })()}
               </div>
 
-              {/* RIGHT: DETAIL PANEL — Enterprise glassmorphic design */}
-              <div style={{
+              {/* RIGHT: DETAIL PANEL — JARVIS-inspired enterprise design */}
+              <div className="astra-detail-panel" style={{
                 flex: 1, display: 'flex', flexDirection: 'column',
-                minHeight: 0, background: T.bg,
+                minHeight: 0, minWidth: 0, background: T.bg,
+                overflow: 'hidden',
               }}>
                 {emailDetail ? (
                   <div className="astra-scroll" style={{
-                    flex: 1, overflowY: 'auto', padding: '24px',
-                    animation: 'slideInRight 0.25s ease',
+                    flex: 1, overflowY: 'auto', overflowX: 'hidden',
+                    animation: 'slideInRight 0.2s ease',
                   }}>
-                    {/* Subject — Large, clear hierarchy */}
-                    <h2 style={{
-                      fontSize: 18, fontWeight: 700, color: T.text, margin: '0 0 14px 0',
-                      lineHeight: 1.35, letterSpacing: '-0.015em',
-                    }}>
-                      {emailDetail.subject || '(no subject)'}
-                    </h2>
-
-                    {/* Sender Card — Full width header */}
+                    {/* ── TOP HEADER BAR: Subject + Open in Gmail ── */}
                     <div style={{
-                      display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px',
-                      borderRadius: 10, marginBottom: 18,
-                      background: 'rgba(139,92,246,0.06)',
-                      border: `1px solid rgba(139,92,246,0.12)`,
-                      backdropFilter: 'blur(8px)',
+                      padding: '16px 20px 12px', borderBottom: `1px solid ${T.border}`,
+                      background: T.bgElevated,
                     }}>
-                      <div style={{
-                        width: 42, height: 42, borderRadius: '50%',
-                        background: `linear-gradient(135deg, ${T.accentCyan}, ${T.accentPurple})`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 16, fontWeight: 700, color: '#fff', flexShrink: 0,
-                      }}>
-                        {((emailDetail.sender || 'U')[0] || 'U').toUpperCase()}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                        <h2 style={{
+                          fontSize: 15, fontWeight: 700, color: T.text, margin: 0,
+                          lineHeight: 1.35, letterSpacing: '-0.01em', flex: 1,
+                        }}>
+                          {emailDetail.subject || '(no subject)'}
+                        </h2>
+                        {emailDetail.message_id && (
+                          <a
+                            href={`https://mail.google.com/mail/u/0/#inbox/${emailDetail.message_id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              padding: '6px 12px', borderRadius: 6, border: `1px solid ${T.border}`,
+                              background: T.bgCard, color: T.textSecondary, fontSize: 10, fontWeight: 600,
+                              textDecoration: 'none', whiteSpace: 'nowrap', flexShrink: 0,
+                              transition: 'all 0.15s',
+                              display: 'flex', alignItems: 'center', gap: 5,
+                            }}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                            Open in Gmail
+                          </a>
+                        )}
                       </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 2 }}>
-                          {emailDetail.sender || 'Unknown'}
+                      {/* Sender inline */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+                        <div style={{
+                          width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+                          background: `linear-gradient(135deg, ${T.accentCyan}, ${T.accentPurple})`,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 13, fontWeight: 700, color: '#fff',
+                        }}>
+                          {((emailDetail.sender || 'U')[0] || 'U').toUpperCase()}
                         </div>
-                        <div style={{ fontSize: 11, color: T.textMuted }}>
-                          {emailDetail.sender_email || ''}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{emailDetail.sender || 'Unknown'}</div>
+                          <div style={{ fontSize: 10, color: T.textDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {emailDetail.sender_email || ''}
+                          </div>
                         </div>
-                      </div>
-                      <div style={{ textAlign: 'right', fontSize: 11 }}>
-                        <div style={{ color: T.textMuted, fontWeight: 600, marginBottom: 2 }}>
-                          {emailDetail.thread_depth || 1} message{(emailDetail.thread_depth || 1) > 1 ? 's' : ''}
-                        </div>
-                        <div style={{ color: T.textDim, fontWeight: 500 }}>
-                          {emailDetail.sentiment ? emailDetail.sentiment.charAt(0).toUpperCase() + emailDetail.sentiment.slice(1) : 'Neutral'}
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <div style={{ fontSize: 10, color: T.textMuted, fontWeight: 600 }}>
+                            {emailDetail.thread_depth || 1} msg{(emailDetail.thread_depth || 1) > 1 ? 's' : ''}
+                          </div>
+                          <div style={{ fontSize: 10, color: T.textDim }}>
+                            {emailDetail.sentiment ? emailDetail.sentiment.charAt(0).toUpperCase() + emailDetail.sentiment.slice(1) : 'Neutral'}
+                          </div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Score + Priority + Category in horizontal layout */}
-                    <div style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
-                      <div style={{
-                        fontSize: 13, fontWeight: 800, color: '#fff',
-                        background: `linear-gradient(135deg, ${priorityColor(emailDetail.priority || 'low')}, ${T.accentPurple})`,
-                        padding: '8px 14px', borderRadius: 8,
-                        boxShadow: `0 2px 8px ${priorityColor(emailDetail.priority || 'low')}40`,
-                      }}>
-                        {emailDetail.score || 0}/10
-                      </div>
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, padding: '8px 12px', borderRadius: 6,
-                        background: priorityBg(emailDetail.priority || 'low'),
-                        color: priorityColor(emailDetail.priority || 'low'),
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.03em',
-                      }}>
-                        {emailDetail.priority || 'unknown'}
-                      </span>
-                      {emailDetail.category && (
+                    {/* ── BODY CONTENT ── */}
+                    <div style={{ padding: '16px 20px' }}>
+
+                      {/* Priority Badge Row */}
+                      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <div style={{
+                          fontSize: 12, fontWeight: 800, color: '#fff',
+                          background: `linear-gradient(135deg, ${priorityColor(emailDetail.priority || 'low')}, ${T.accentPurple})`,
+                          padding: '5px 12px', borderRadius: 6,
+                          boxShadow: `0 2px 8px ${priorityColor(emailDetail.priority || 'low')}30`,
+                        }}>
+                          {emailDetail.score || 0}/10
+                        </div>
                         <span style={{
-                          fontSize: 10, fontWeight: 700, padding: '8px 12px', borderRadius: 6,
-                          background: 'rgba(139,92,246,0.12)', color: T.accentPurple,
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.03em',
+                          fontSize: 9, fontWeight: 700, padding: '6px 10px', borderRadius: 5,
+                          background: priorityBg(emailDetail.priority || 'low'),
+                          color: priorityColor(emailDetail.priority || 'low'),
+                          textTransform: 'uppercase', letterSpacing: '0.04em',
                         }}>
-                          {emailDetail.category}
+                          {emailDetail.priority || 'unknown'}
                         </span>
+                        {emailDetail.category && emailDetail.category !== 'unknown' && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, padding: '6px 10px', borderRadius: 5,
+                            background: 'rgba(139,92,246,0.1)', color: T.accentPurple,
+                            textTransform: 'uppercase', letterSpacing: '0.04em',
+                          }}>
+                            {emailDetail.category}
+                          </span>
+                        )}
+                        {emailDetail.scored_by === 'rules+ai' && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, padding: '6px 10px', borderRadius: 5,
+                            background: T.successSoft || 'rgba(34,197,94,0.1)', color: T.success,
+                            textTransform: 'uppercase', letterSpacing: '0.04em',
+                          }}>
+                            AI Enhanced
+                          </span>
+                        )}
+                      </div>
+
+                      {/* ── RECOMMENDED ACTION — JARVIS-style prominent card ── */}
+                      {emailDetail.recommended_action && emailDetail.recommended_action !== 'none' && (
+                        <div style={{
+                          marginBottom: 16, padding: '12px 14px', borderRadius: 10,
+                          background: emailDetail.recommended_action === 'respond_now' ? 'rgba(239,68,68,0.08)' :
+                                     emailDetail.recommended_action === 'review_today' ? 'rgba(245,158,11,0.08)' :
+                                     'rgba(6,182,212,0.06)',
+                          border: `1px solid ${emailDetail.recommended_action === 'respond_now' ? 'rgba(239,68,68,0.2)' :
+                                  emailDetail.recommended_action === 'review_today' ? 'rgba(245,158,11,0.2)' :
+                                  'rgba(6,182,212,0.15)'}`,
+                        }}>
+                          <div style={{
+                            fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em',
+                            marginBottom: 6,
+                            color: emailDetail.recommended_action === 'respond_now' ? '#ef4444' :
+                                   emailDetail.recommended_action === 'review_today' ? '#f59e0b' : T.accentCyan,
+                          }}>
+                            Recommended Action
+                          </div>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: T.text, textTransform: 'capitalize' }}>
+                            {(emailDetail.recommended_action || '').replace(/_/g, ' ')}
+                          </div>
+                        </div>
                       )}
-                      {emailDetail.scored_by === 'rules+ai' && (
-                        <span style={{
-                          fontSize: 10, fontWeight: 700, padding: '8px 12px', borderRadius: 6,
-                          background: T.successSoft, color: T.success,
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.03em',
-                        }}>
-                          AI
-                        </span>
+
+                      {/* ── AI BRIEFING — Glassmorphic card ── */}
+                      {emailDetail.briefing && (
+                        <div style={{ marginBottom: 14 }}>
+                          <div style={{
+                            fontSize: 9, fontWeight: 700, color: T.accentCyan, textTransform: 'uppercase',
+                            marginBottom: 6, letterSpacing: '0.06em',
+                            display: 'flex', alignItems: 'center', gap: 5,
+                          }}>
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={T.accentCyan} strokeWidth="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                            AI Briefing
+                          </div>
+                          <div style={{
+                            fontSize: 12, color: T.text, lineHeight: 1.55, padding: '12px 14px',
+                            borderRadius: 8,
+                            background: 'rgba(6,182,212,0.05)',
+                            border: `1px solid rgba(6,182,212,0.12)`,
+                            borderLeft: `3px solid ${T.accentCyan}`,
+                          }}>
+                            {emailDetail.briefing}
+                          </div>
+                        </div>
                       )}
-                    </div>
 
-                    {/* AI Summary — Glassmorphic card */}
-                    {emailDetail.briefing && (
-                      <div style={{ marginBottom: 16 }}>
-                        <div style={{
-                          fontSize: 10, fontWeight: 700, color: T.accentCyan, textTransform: 'uppercase',
-                          marginBottom: 8, letterSpacing: '0.05em',
-                          display: 'flex', alignItems: 'center', gap: 6,
-                        }}>
-                          <span>⚡</span> AI Summary
+                      {/* ── STRATEGIC CONTEXT ── */}
+                      {emailDetail.strategic_context && (
+                        <div style={{ marginBottom: 14 }}>
+                          <div style={{
+                            fontSize: 9, fontWeight: 700, color: T.accentPurple, textTransform: 'uppercase',
+                            marginBottom: 6, letterSpacing: '0.06em',
+                          }}>
+                            Strategic Context
+                          </div>
+                          <div style={{
+                            fontSize: 12, color: T.textSecondary, lineHeight: 1.55, padding: '12px 14px',
+                            borderRadius: 8,
+                            background: 'rgba(139,92,246,0.04)',
+                            border: `1px solid rgba(139,92,246,0.1)`,
+                            borderLeft: `3px solid ${T.accentPurple}`,
+                          }}>
+                            {emailDetail.strategic_context}
+                          </div>
                         </div>
-                        <div style={{
-                          fontSize: 12, color: T.text, lineHeight: 1.6, padding: '14px 14px',
-                          borderRadius: 10,
-                          background: 'rgba(6,182,212,0.06)',
-                          border: `1px solid rgba(6,182,212,0.15)`,
-                          backdropFilter: 'blur(6px)',
-                          borderLeft: `4px solid ${T.accentCyan}`,
-                        }}>
-                          {emailDetail.briefing}
-                        </div>
-                      </div>
-                    )}
+                      )}
 
-                    {/* Strategic Context — Distinct visual treatment */}
-                    {emailDetail.strategic_context && (
-                      <div style={{ marginBottom: 16 }}>
-                        <div style={{
-                          fontSize: 10, fontWeight: 700, color: T.accentPurple, textTransform: 'uppercase',
-                          marginBottom: 8, letterSpacing: '0.05em',
-                        }}>
-                          Strategic Context
-                        </div>
-                        <div style={{
-                          fontSize: 12, color: T.textSecondary, lineHeight: 1.6, padding: '14px 14px',
-                          borderRadius: 10,
-                          background: 'rgba(139,92,246,0.05)',
-                          border: `1px solid rgba(139,92,246,0.1)`,
-                          backdropFilter: 'blur(6px)',
-                          borderLeft: `4px solid ${T.accentPurple}`,
-                        }}>
-                          {emailDetail.strategic_context}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Score Breakdown — Horizontal bar chart */}
-                    {emailDetail.scoring_breakdown && (
-                      <div style={{ marginBottom: 16 }}>
-                        <div style={{
-                          fontSize: 10, fontWeight: 700, color: T.textDim, textTransform: 'uppercase',
-                          marginBottom: 10, letterSpacing: '0.05em',
-                        }}>
-                          Scoring Details
-                        </div>
-                        <div style={{
-                          padding: '14px', borderRadius: 10,
-                          background: T.bgCard, border: `1px solid ${T.border}`,
-                        }}>
-                          {Object.entries(emailDetail.scoring_breakdown)
-                            .filter(([k, v]) => k !== 'final_score' && k !== 'passes_fired' && typeof v === 'object' && v && v.score !== undefined && v.score > 0)
-                            .map(([key, val], idx) => (
-                              <div key={key} style={{ marginBottom: idx < 3 ? 10 : 0 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                                  <span style={{ color: T.textSecondary, fontWeight: 600, textTransform: 'capitalize' }}>{key.replace(/_/g, ' ')}</span>
-                                  <span style={{ color: T.accentCyan, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>+{val.score}</span>
-                                </div>
-                                <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.03)', overflow: 'hidden' }}>
-                                  <div style={{
-                                    height: '100%', borderRadius: 3,
-                                    background: `linear-gradient(90deg, ${T.accentCyan}, ${T.accentPurple})`,
-                                    width: `${Math.min((val.score || 0) * 12, 100)}%`,
-                                    transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
-                                    boxShadow: `0 0 8px ${T.accentCyan}40`,
-                                  }} />
-                                </div>
-                              </div>
-                            ))}
-                          {emailDetail.scoring_breakdown.noise?.penalty < 0 && (
-                            <div style={{ marginTop: 10 }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                                <span style={{ color: T.danger, fontWeight: 600 }}>Noise Penalty</span>
-                                <span style={{ color: T.danger, fontWeight: 800 }}>{emailDetail.scoring_breakdown.noise.penalty}</span>
-                              </div>
-                              <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.03)', overflow: 'hidden' }}>
-                                <div style={{
-                                  height: '100%', borderRadius: 3, background: T.danger,
-                                  width: `${Math.min(Math.abs(emailDetail.scoring_breakdown.noise.penalty || 0) * 12, 100)}%`,
-                                  transition: 'width 0.5s ease',
-                                  boxShadow: `0 0 8px ${T.danger}40`,
-                                }} />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* AI Draft Reply */}
-                    {emailDetail.draft_reply && (
-                      <div style={{ marginBottom: 16 }}>
-                        <div style={{
-                          fontSize: 10, fontWeight: 700, color: T.success, textTransform: 'uppercase',
-                          marginBottom: 8, letterSpacing: '0.05em',
-                        }}>
-                          Suggested Reply
-                        </div>
-                        <div style={{
-                          padding: '14px', borderRadius: 10,
-                          background: 'rgba(34,197,94,0.06)',
-                          border: `1px solid rgba(34,197,94,0.12)`,
-                          backdropFilter: 'blur(6px)',
-                          borderLeft: `4px solid ${T.success}`,
-                          fontSize: 12, color: T.text, lineHeight: 1.6,
-                        }}>
-                          {emailDetail.draft_reply}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Voice-Matched Draft */}
-                    {draftResult && (
-                      <div style={{ marginBottom: 16, animation: 'slideInUp 0.25s ease' }}>
-                        <div style={{
-                          fontSize: 10, fontWeight: 700, color: T.accentPurple, textTransform: 'uppercase',
-                          marginBottom: 8, letterSpacing: '0.05em',
-                          display: 'flex', alignItems: 'center', gap: 6,
-                        }}>
-                          🎙️ Voice Draft
-                          {draftResult.style_fingerprint?.formality && (
-                            <span style={{
-                              fontSize: 9, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
-                              background: 'rgba(139,92,246,0.1)', color: T.accentPurple,
-                              textTransform: 'capitalize',
-                            }}>
-                              {draftResult.style_fingerprint.formality}
+                      {/* ── SCORING BREAKDOWN — Compact bar chart ── */}
+                      {emailDetail.scoring_breakdown && (
+                        <div style={{ marginBottom: 14 }}>
+                          <div style={{
+                            fontSize: 9, fontWeight: 700, color: T.textDim, textTransform: 'uppercase',
+                            marginBottom: 8, letterSpacing: '0.06em',
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          }}>
+                            <span>Scoring Breakdown</span>
+                            <span style={{ fontSize: 9, color: T.textDim, fontWeight: 500 }}>
+                              {emailDetail.scoring_breakdown.layer || 'Rules Engine'}
                             </span>
-                          )}
+                          </div>
+                          <div style={{
+                            padding: '12px', borderRadius: 8,
+                            background: T.bgCard, border: `1px solid ${T.border}`,
+                          }}>
+                            {(() => {
+                              const bd = emailDetail.scoring_breakdown || {}
+                              const rows = [
+                                { label: 'Contact Tier', score: bd.contact_tier?.score, reason: bd.contact_tier?.reason },
+                                { label: 'VIP Match', score: bd.vip_match?.score, reason: bd.vip_match?.reason },
+                                { label: 'Keywords', score: bd.keywords?.score, reason: bd.keywords?.matches?.join(', ') },
+                                { label: 'Business Logic', score: bd.business_logic?.score, reason: bd.business_logic?.reason },
+                                { label: 'Thread Depth', score: bd.thread_depth?.score, reason: bd.thread_depth?.reason },
+                                { label: 'Urgency', score: bd.urgency?.score, reason: bd.urgency?.matches?.join(', ') },
+                                { label: 'Boosters', score: bd.signal_boosters?.score, reason: bd.signal_boosters?.reasons?.join(', ') },
+                                { label: 'Founder Reply', score: typeof bd.founder_replied === 'number' ? bd.founder_replied : 0 },
+                              ].filter(r => r.score > 0)
+                              const noisePenalty = bd.noise?.penalty || 0
+                              return (
+                                <>
+                                  {rows.map((row, idx) => (
+                                    <div key={row.label} style={{ marginBottom: idx < rows.length - 1 ? 8 : 0 }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 3 }}>
+                                        <span style={{ color: T.textSecondary, fontWeight: 600 }}>{row.label}</span>
+                                        <span style={{ color: T.accentCyan, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>+{row.score}</span>
+                                      </div>
+                                      <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
+                                        <div style={{
+                                          height: '100%', borderRadius: 2,
+                                          background: `linear-gradient(90deg, ${T.accentCyan}, ${T.accentPurple})`,
+                                          width: `${Math.min(row.score * 12, 100)}%`,
+                                          transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+                                        }} />
+                                      </div>
+                                      {row.reason && (
+                                        <div style={{ fontSize: 9, color: T.textDim, marginTop: 2, fontStyle: 'italic' }}>{row.reason}</div>
+                                      )}
+                                    </div>
+                                  ))}
+                                  {noisePenalty < 0 && (
+                                    <div style={{ marginTop: 8 }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 3 }}>
+                                        <span style={{ color: T.danger, fontWeight: 600 }}>Noise Penalty</span>
+                                        <span style={{ color: T.danger, fontWeight: 800 }}>{noisePenalty}</span>
+                                      </div>
+                                      <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
+                                        <div style={{
+                                          height: '100%', borderRadius: 2, background: T.danger,
+                                          width: `${Math.min(Math.abs(noisePenalty) * 12, 100)}%`,
+                                        }} />
+                                      </div>
+                                    </div>
+                                  )}
+                                  {rows.length === 0 && noisePenalty === 0 && (
+                                    <div style={{ fontSize: 10, color: T.textDim, padding: 6 }}>No scoring signals</div>
+                                  )}
+                                </>
+                              )
+                            })()}
+                          </div>
                         </div>
-                        <div style={{
-                          padding: '14px', borderRadius: 10,
-                          background: 'rgba(139,92,246,0.05)',
-                          border: `1px solid rgba(139,92,246,0.1)`,
-                          backdropFilter: 'blur(6px)',
-                          borderLeft: `4px solid ${T.accentPurple}`,
-                          fontSize: 12, color: T.text, lineHeight: 1.65, whiteSpace: 'pre-wrap',
-                        }}>
-                          {draftResult.draft || 'No draft generated.'}
+                      )}
+
+                      {/* ── AI DRAFT REPLY ── */}
+                      {emailDetail.draft_reply && (
+                        <div style={{ marginBottom: 14 }}>
+                          <div style={{
+                            fontSize: 9, fontWeight: 700, color: T.success, textTransform: 'uppercase',
+                            marginBottom: 6, letterSpacing: '0.06em',
+                            display: 'flex', alignItems: 'center', gap: 5,
+                          }}>
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={T.success} strokeWidth="2.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                            Suggested Reply
+                          </div>
+                          <div style={{
+                            padding: '12px 14px', borderRadius: 8,
+                            background: 'rgba(34,197,94,0.05)',
+                            border: `1px solid rgba(34,197,94,0.1)`,
+                            borderLeft: `3px solid ${T.success}`,
+                            fontSize: 12, color: T.text, lineHeight: 1.55,
+                          }}>
+                            {emailDetail.draft_reply}
+                          </div>
+                          <button
+                            onClick={() => { navigator.clipboard.writeText(emailDetail.draft_reply) }}
+                            style={{
+                              marginTop: 6, padding: '5px 10px', borderRadius: 5, border: `1px solid ${T.border}`,
+                              background: T.bgCard, color: T.textSecondary, fontSize: 10, fontWeight: 600,
+                              cursor: 'pointer', transition: 'all 0.15s',
+                            }}
+                          >
+                            Copy Reply
+                          </button>
                         </div>
-                        {draftResult.style_fingerprint && (
-                          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-                            {['tone', 'emoji_usage', 'avg_sentence_length'].filter(k => draftResult.style_fingerprint[k]).map(k => (
+                      )}
+
+                      {/* ── VOICE-MATCHED DRAFT ── */}
+                      {draftResult && (
+                        <div style={{ marginBottom: 14, animation: 'slideInUp 0.2s ease' }}>
+                          <div style={{
+                            fontSize: 9, fontWeight: 700, color: T.accentPurple, textTransform: 'uppercase',
+                            marginBottom: 6, letterSpacing: '0.06em',
+                            display: 'flex', alignItems: 'center', gap: 5,
+                          }}>
+                            Voice Draft
+                            {draftResult.style_fingerprint?.formality && (
+                              <span style={{
+                                fontSize: 8, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+                                background: 'rgba(139,92,246,0.1)', color: T.accentPurple,
+                                textTransform: 'capitalize',
+                              }}>
+                                {draftResult.style_fingerprint.formality}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{
+                            padding: '12px 14px', borderRadius: 8,
+                            background: 'rgba(139,92,246,0.04)',
+                            border: `1px solid rgba(139,92,246,0.1)`,
+                            borderLeft: `3px solid ${T.accentPurple}`,
+                            fontSize: 12, color: T.text, lineHeight: 1.55, whiteSpace: 'pre-wrap',
+                          }}>
+                            {draftResult.draft || 'No draft generated.'}
+                          </div>
+                          <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                            <button
+                              onClick={() => { navigator.clipboard.writeText(draftResult.draft || '') }}
+                              style={{
+                                padding: '5px 10px', borderRadius: 5, border: `1px solid ${T.border}`,
+                                background: T.bgCard, color: T.textSecondary, fontSize: 10, fontWeight: 600,
+                                cursor: 'pointer', transition: 'all 0.15s',
+                              }}
+                            >
+                              Copy Draft
+                            </button>
+                            {draftResult.style_fingerprint && ['tone', 'emoji_usage'].filter(k => draftResult.style_fingerprint[k]).map(k => (
                               <span key={k} style={{
                                 fontSize: 9, padding: '4px 8px', borderRadius: 4,
-                                background: 'rgba(139,92,246,0.08)', color: T.accentPurple, fontWeight: 600,
-                                textTransform: 'capitalize',
+                                background: 'rgba(139,92,246,0.06)', color: T.accentPurple, fontWeight: 600,
+                                textTransform: 'capitalize', display: 'flex', alignItems: 'center',
                               }}>
                                 {k.replace(/_/g, ' ')}: {draftResult.style_fingerprint[k]}
                               </span>
                             ))}
                           </div>
-                        )}
+                        </div>
+                      )}
+
+                      {/* ── EMAIL BODY PREVIEW — Toggle with E key ── */}
+                      {emailDetail.body && (
+                        <div style={{ marginBottom: 14 }}>
+                          <button
+                            onClick={() => setShowEmailBody(prev => !prev)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+                              padding: '8px 12px', borderRadius: 6, border: `1px solid ${T.border}`,
+                              background: T.bgCard, color: T.textSecondary, fontSize: 10, fontWeight: 600,
+                              cursor: 'pointer', transition: 'all 0.15s',
+                            }}
+                          >
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              {showEmailBody
+                                ? <><polyline points="18 15 12 9 6 15"/></>
+                                : <><polyline points="6 9 12 15 18 9"/></>}
+                            </svg>
+                            {showEmailBody ? 'Hide' : 'Show'} Original Email
+                            <span style={{ marginLeft: 'auto', fontSize: 9, color: T.textDim, opacity: 0.6 }}>E</span>
+                          </button>
+                          {showEmailBody && (
+                            <div style={{
+                              marginTop: 8, padding: '14px', borderRadius: 8,
+                              background: T.bgCard, border: `1px solid ${T.border}`,
+                              fontSize: 12, color: T.textSecondary, lineHeight: 1.6,
+                              maxHeight: 300, overflowY: 'auto', whiteSpace: 'pre-wrap',
+                              fontFamily: 'ui-monospace, monospace',
+                            }}
+                            className="astra-scroll"
+                            >
+                              {emailDetail.body.substring(0, 3000)}
+                              {emailDetail.body.length > 3000 && '\n\n... (truncated)'}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* ── KEYBOARD HINTS ── */}
+                      <div style={{
+                        display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 4,
+                        padding: '6px 0',
+                      }}>
+                        {[
+                          { key: 'J/K', label: 'Navigate' },
+                          { key: 'R', label: 'Reply' },
+                          { key: 'A', label: 'Archive' },
+                          { key: 'E', label: 'Body' },
+                          { key: 'Esc', label: 'Close' },
+                        ].map(h => (
+                          <span key={h.key} style={{
+                            fontSize: 9, color: T.textDim, display: 'flex', alignItems: 'center', gap: 3,
+                          }}>
+                            <span style={{
+                              padding: '1px 5px', borderRadius: 3, border: `1px solid ${T.border}`,
+                              fontFamily: 'ui-monospace, monospace', fontSize: 8, fontWeight: 600,
+                              background: 'rgba(255,255,255,0.03)',
+                            }}>{h.key}</span>
+                            {h.label}
+                          </span>
+                        ))}
                       </div>
-                    )}
+                    </div>
 
-                    {/* Action Buttons — Primary CTA + Stage dropdown + Utilities */}
+                    {/* ── STICKY ACTION BAR — Pipeline + Actions ── */}
                     <div style={{
-                      display: 'flex', flexDirection: 'column', gap: 10, marginTop: 20,
-                      paddingTop: 16, borderTop: `1px solid ${T.border}`,
+                      padding: '12px 20px 16px', borderTop: `1px solid ${T.border}`,
+                      background: T.bgElevated,
+                      position: 'sticky', bottom: 0,
                     }}>
-                      <button
-                        onClick={() => {
-                          const emails = currentSplitEmails.length > 0 ? currentSplitEmails : filteredScored
-                          if (emails[selectedEmailIdx]) handleDraft(emails[selectedEmailIdx])
-                        }}
-                        disabled={drafting}
-                        className="astra-action-btn"
-                        style={{
-                          width: '100%', padding: '12px 16px', borderRadius: 8, border: 'none', cursor: 'pointer',
-                          background: `linear-gradient(135deg, ${T.accentCyan}, ${T.accentPurple})`,
-                          color: '#fff', fontSize: 12, fontWeight: 700, letterSpacing: '0.02em',
-                          transition: 'all 0.2s', opacity: drafting ? 0.6 : 1,
-                          boxShadow: drafting ? 'none' : `0 4px 12px ${T.accentCyan}30`,
-                          position: 'relative',
-                        }}
-                      >
-                        🎙️ {drafting ? 'Generating...' : 'Voice Draft Reply'}
-                        <span style={{ marginLeft: 8, fontSize: 10, opacity: 0.7 }}>R</span>
-                      </button>
+                      {/* Pipeline Stage Flow — JARVIS-style horizontal buttons */}
+                      <div style={{
+                        display: 'flex', gap: 4, marginBottom: 10, flexWrap: 'wrap',
+                      }}>
+                        {['triaged', 'action_required', 'delegated', 'scheduled', 'replied', 'done'].map((stage) => {
+                          const isCurrentStage = (emailDetail.pipeline_stage || 'triaged') === stage
+                          const stageColors = {
+                            triaged: T.accentCyan,
+                            action_required: '#ef4444',
+                            delegated: '#f59e0b',
+                            scheduled: '#8b5cf6',
+                            replied: '#3b82f6',
+                            done: '#22c55e',
+                          }
+                          return (
+                            <button
+                              key={stage}
+                              onClick={() => moveStage(emailDetail.message_id || emailDetailId, stage)}
+                              style={{
+                                padding: '5px 10px', borderRadius: 5, border: 'none', cursor: 'pointer',
+                                fontSize: 9, fontWeight: isCurrentStage ? 700 : 500,
+                                background: isCurrentStage ? `${stageColors[stage]}20` : 'rgba(255,255,255,0.03)',
+                                color: isCurrentStage ? stageColors[stage] : T.textDim,
+                                transition: 'all 0.15s',
+                                textTransform: 'capitalize',
+                                outline: isCurrentStage ? `1px solid ${stageColors[stage]}40` : 'none',
+                              }}
+                            >
+                              {stage.replace(/_/g, ' ')}
+                            </button>
+                          )
+                        })}
+                      </div>
 
+                      {/* Action buttons row */}
                       <div style={{ display: 'flex', gap: 8 }}>
-                        <select
-                          style={{
-                            flex: 1, padding: '10px 12px', borderRadius: 8,
-                            background: T.bgInput, border: `1px solid ${T.border}`,
-                            color: T.text, fontSize: 11, fontWeight: 600,
-                            cursor: 'pointer', outline: 'none',
-                            transition: 'all 0.2s',
+                        <button
+                          onClick={() => {
+                            const emails = currentSplitEmails.length > 0 ? currentSplitEmails : filteredScored
+                            if (emails[selectedEmailIdx]) handleDraft(emails[selectedEmailIdx])
                           }}
-                          defaultValue={emailDetail.pipeline_stage || 'triaged'}
-                          onChange={(e) => moveStage(emailDetail.message_id || emailDetailId, e.target.value)}
+                          disabled={drafting}
+                          className="astra-action-btn"
+                          style={{
+                            flex: 1, padding: '10px 14px', borderRadius: 7, border: 'none', cursor: 'pointer',
+                            background: `linear-gradient(135deg, ${T.accentCyan}, ${T.accentPurple})`,
+                            color: '#fff', fontSize: 11, fontWeight: 700,
+                            transition: 'all 0.2s', opacity: drafting ? 0.6 : 1,
+                            boxShadow: drafting ? 'none' : `0 3px 10px ${T.accentCyan}25`,
+                          }}
                         >
-                          <option value="triaged">Triaged</option>
-                          <option value="action_required">Action Required</option>
-                          <option value="delegated">Delegated</option>
-                          <option value="scheduled">Scheduled</option>
-                          <option value="replied">Replied</option>
-                          <option value="done">Done</option>
-                          <option value="archived">Archived</option>
-                        </select>
+                          {drafting ? 'Generating...' : 'Draft Reply'}
+                        </button>
                         <button
                           onClick={() => moveStage(emailDetail.message_id || emailDetailId, 'archived')}
                           className="astra-action-btn"
                           style={{
-                            padding: '10px 14px', borderRadius: 8, border: `1px solid ${T.border}`,
-                            background: T.bgInput, color: T.textMuted, cursor: 'pointer',
-                            fontSize: 11, fontWeight: 600, transition: 'all 0.2s',
-                            title: 'Archive (A)',
+                            padding: '10px 14px', borderRadius: 7, border: `1px solid ${T.border}`,
+                            background: T.bgCard, color: T.textMuted, cursor: 'pointer',
+                            fontSize: 11, fontWeight: 600, transition: 'all 0.15s',
                           }}
                           title="Archive"
                         >
-                          📦
+                          Archive
                         </button>
                       </div>
                     </div>
@@ -1452,13 +1732,21 @@ export default function DashboardView({ activeView, backendUrl, transcript, conf
                     alignItems: 'center', justifyContent: 'center',
                     padding: 40, textAlign: 'center',
                   }}>
-                    <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke={T.textDim} strokeWidth="1.5" style={{ marginBottom: 14, opacity: 0.25 }}>
-                      <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/>
-                    </svg>
-                    <div style={{ fontSize: 13, color: T.textMuted, fontWeight: 600, marginBottom: 4 }}>
+                    <div style={{
+                      width: 64, height: 64, borderRadius: 16,
+                      background: 'rgba(6,182,212,0.06)',
+                      border: `1px solid rgba(6,182,212,0.1)`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      marginBottom: 16,
+                    }}>
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={T.textDim} strokeWidth="1.5" style={{ opacity: 0.4 }}>
+                        <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/>
+                      </svg>
+                    </div>
+                    <div style={{ fontSize: 14, color: T.textMuted, fontWeight: 600, marginBottom: 4 }}>
                       Select an email
                     </div>
-                    <div style={{ fontSize: 11, color: T.textDim }}>
+                    <div style={{ fontSize: 11, color: T.textDim, maxWidth: 200 }}>
                       Choose from the list to view AI analysis and take action
                     </div>
                   </div>

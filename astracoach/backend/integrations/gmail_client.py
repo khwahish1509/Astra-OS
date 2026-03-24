@@ -595,6 +595,69 @@ class GmailClient:
             print(f"[Gmail] ⚠️  parse message failed: {e}")
             return None
 
+    async def get_profile(self) -> dict:
+        """Get Gmail profile including current historyId."""
+        def _fetch():
+            service = self._build_service()
+            return service.users().getProfile(userId="me").execute()
+        result = await self._retry_call(_fetch, "profile")
+        return result or {}
+
+    async def get_new_emails_since(self, history_id: str) -> tuple[list[EmailMessage], str]:
+        """
+        Use Gmail History API to fetch only NEW emails since a historyId.
+        Returns (new_emails, new_history_id).
+        Much faster than re-querying — perfect for real-time sync.
+        """
+        all_message_ids = set()
+        page_token = None
+        new_history_id = history_id
+
+        while True:
+            def _fetch(pt=page_token, hid=history_id):
+                service = self._build_service()
+                kwargs = {"userId": "me", "startHistoryId": hid, "historyTypes": ["messageAdded"]}
+                if pt:
+                    kwargs["pageToken"] = pt
+                return service.users().history().list(**kwargs).execute()
+
+            result = await self._retry_call(_fetch, f"history since {history_id}")
+            if not result:
+                break
+
+            new_history_id = str(result.get("historyId", history_id))
+
+            for history_record in result.get("history", []):
+                for msg_added in history_record.get("messagesAdded", []):
+                    msg = msg_added.get("message", {})
+                    if msg.get("id"):
+                        labels = msg.get("labelIds", [])
+                        # Only inbox messages
+                        if "INBOX" in labels:
+                            all_message_ids.add(msg["id"])
+
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
+
+        if not all_message_ids:
+            return [], new_history_id
+
+        # Fetch full message details
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
+        emails = []
+
+        async def _fetch_one(mid):
+            async with semaphore:
+                email = await self._fetch_message(mid)
+                if email:
+                    emails.append(email)
+
+        await asyncio.gather(*[_fetch_one(mid) for mid in all_message_ids])
+        emails.sort(key=lambda e: e.timestamp, reverse=True)
+        print(f"[Gmail] ✅ History sync: {len(emails)} new emails since historyId {history_id}")
+        return emails, new_history_id
+
     def _extract_body(self, payload: dict) -> str:
         """
         Recursively extract plain-text body from a Gmail message payload.
