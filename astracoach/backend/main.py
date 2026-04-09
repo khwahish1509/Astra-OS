@@ -166,6 +166,17 @@ async def lifespan(app: FastAPI):
             _split_inbox = SplitInboxEngine()
             print("[Astra OS] 🧠 Email Memory + Voice Drafter + Split Inbox initialized")
 
+            # Initialize EmailClaw (for testing — replaces old email tools)
+            _emailclaw = None
+            try:
+                from emailclaw import EmailClaw
+                _emailclaw = EmailClaw(gmail=TOKEN_PATH)
+                print("[Astra OS] 📧 EmailClaw initialized successfully")
+            except ImportError:
+                print("[Astra OS] ⚠️  EmailClaw not installed — email tools disabled")
+            except Exception as ec_err:
+                print(f"[Astra OS] ⚠️  EmailClaw init failed: {ec_err}")
+
             # Build brain tools for voice session injection
             from agents.brain_tools import ToolDeps, build_tools
             tool_deps = ToolDeps(
@@ -173,6 +184,7 @@ async def lifespan(app: FastAPI):
                 gmail=_gmail, calendar=_calendar, founder_id=FOUNDER_ID,
                 drive=_drive, tasks=_tasks, contacts=_contacts,
                 memory_service=_memory_service, app_name=APP_NAME,
+                emailclaw=_emailclaw,
             )
             _brain_tool_fns = build_tools(tool_deps)
             print(f"[Astra OS] 🧠 {len(_brain_tool_fns)} brain tools built for voice session")

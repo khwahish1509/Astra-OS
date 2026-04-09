@@ -92,6 +92,7 @@ class ToolDeps:
         contacts:       "ContactsClient" = None,
         memory_service = None,  # ADK BaseMemoryService for long-term recall
         app_name:  str = "AstraAgent",
+        emailclaw = None,              # EmailClaw instance for enriched email tools
     ):
         self.store      = store
         self.embeddings = embeddings
@@ -103,6 +104,7 @@ class ToolDeps:
         self.contacts   = contacts
         self.memory_service = memory_service
         self.app_name   = app_name
+        self.emailclaw  = emailclaw
         self.cache      = _TTLCache(default_ttl=45.0)  # 45s cache for read-heavy tools
 
 
@@ -1802,6 +1804,88 @@ def build_tools(deps: ToolDeps) -> dict:
         except Exception as e:
             return {"error": f"Embed sync failed: {e}"}
 
+    # ── EmailClaw Tools (replaces old Gmail tools for testing) ────────────
+
+    async def emailclaw_search(
+        query: str,
+        detail: str = "standard",
+        include_thread: bool = True,
+        include_signals: bool = True,
+        include_sender_history: bool = False,
+        max_results: int = 20,
+    ) -> dict:
+        """
+        Search emails with full contextual enrichment via EmailClaw.
+        Use this for ANY email query — inbox check, sender lookup, keyword search.
+
+        Args:
+            query: Search string (e.g. 'is:unread', 'from:sarah@sequoia.vc', 'subject:invoice')
+            detail: Level of context — 'minimal' | 'standard' | 'full'
+            include_thread: Include full thread history for each email
+            include_signals: Include action signals (needs_reply, urgency, is_fyi)
+            include_sender_history: Include past interaction history with each sender
+            max_results: Max emails to return (default 20)
+
+        Returns:
+            List of emails with requested context attached
+        """
+        if not deps.emailclaw:
+            return {"error": "EmailClaw not configured"}
+        try:
+            results = await deps.emailclaw.search(
+                query=query,
+                max_results=max_results,
+                context={
+                    "detail": detail,
+                    "include_thread": include_thread,
+                    "include_signals": include_signals,
+                    "include_sender_history": include_sender_history,
+                },
+            )
+            return results
+        except Exception as e:
+            return {"error": f"EmailClaw search failed: {e}"}
+
+    async def emailclaw_get_thread(thread_id: str, detail: str = "full") -> dict:
+        """
+        Get full thread context for an email conversation via EmailClaw.
+        Returns every message in the thread with sender info and signals.
+
+        Args:
+            thread_id: The thread/conversation ID
+            detail: 'minimal' | 'standard' | 'full'
+
+        Returns:
+            Thread with all messages, participants, and context
+        """
+        if not deps.emailclaw:
+            return {"error": "EmailClaw not configured"}
+        try:
+            return await deps.emailclaw.get_thread(
+                thread_id=thread_id,
+                context={"detail": detail},
+            )
+        except Exception as e:
+            return {"error": f"EmailClaw get_thread failed: {e}"}
+
+    async def emailclaw_sender_history(email_address: str) -> dict:
+        """
+        Get full relationship history with a specific sender via EmailClaw.
+        Shows past emails, frequency, response patterns, and relationship signals.
+
+        Args:
+            email_address: The sender's email address (e.g. 'sarah@sequoia.vc')
+
+        Returns:
+            ContactHistory with interaction count, last contact, tone, and recent emails
+        """
+        if not deps.emailclaw:
+            return {"error": "EmailClaw not configured"}
+        try:
+            return await deps.emailclaw.get_sender_history(email_address)
+        except Exception as e:
+            return {"error": f"EmailClaw sender_history failed: {e}"}
+
     # ── Return all tools as a name → function mapping ─────────────────────
 
     return {
@@ -1832,14 +1916,16 @@ def build_tools(deps: ToolDeps) -> dict:
         "get_pending_alerts":       get_pending_alerts,
         "dismiss_alert":            dismiss_alert,
         "mark_alert_surfaced":      mark_alert_surfaced,
-        # Gmail
-        "get_recent_emails":        get_recent_emails,
-        "get_email_thread":         get_email_thread,
-        "send_email":               send_email,
-        "reply_to_email":           reply_to_email,
-        "search_emails":            search_emails,
-        "get_emails_from_sender":   get_emails_from_sender,
-        "get_unread_email_count":   get_unread_email_count,
+        # ══════════════════════════════════════════════════════════════
+        # OLD EMAIL TOOLS — DISABLED FOR EMAILCLAW TESTING
+        # ══════════════════════════════════════════════════════════════
+        # "get_recent_emails":        get_recent_emails,
+        # "get_email_thread":         get_email_thread,
+        # "send_email":               send_email,
+        # "reply_to_email":           reply_to_email,
+        # "search_emails":            search_emails,
+        # "get_emails_from_sender":   get_emails_from_sender,
+        # "get_unread_email_count":   get_unread_email_count,
         # Calendar
         "get_upcoming_meetings":    get_upcoming_meetings,
         "get_todays_schedule":      get_todays_schedule,
@@ -1875,23 +1961,31 @@ def build_tools(deps: ToolDeps) -> dict:
         "get_meeting_prep":         get_meeting_prep,
         # Weekly Digest
         "get_weekly_digest":        get_weekly_digest,
-        # Email Routing
-        "classify_and_route_email": classify_and_route_email,
-        "get_routed_emails":        get_routed_emails,
-        "create_routing_rule_voice": create_routing_rule_voice,
-        "get_email_routing_summary": get_email_routing_summary,
-        "create_team_voice":        create_team_voice,
-        # Email Intelligence (two-layer scoring pipeline)
-        "triage_inbox":             triage_inbox,
-        "get_email_priority_summary": get_email_priority_summary,
-        "get_scored_emails_list":   get_scored_emails_list,
-        "get_email_briefing":       get_email_briefing,
-        "move_email_pipeline":      move_email_pipeline,
-        "add_contact_tier":         add_contact_tier,
-        "draft_reply_to_email":     draft_reply_to_email,
-        # RAG Email Search + Voice-Matched Drafts + Split Inbox
-        "search_email_history":     search_email_history,
-        "generate_voice_draft":     generate_voice_draft,
-        "get_split_inbox":          get_split_inbox,
-        "sync_email_embeddings":    sync_email_embeddings,
+        # # Email Routing — DISABLED FOR EMAILCLAW TESTING
+        # "classify_and_route_email": classify_and_route_email,
+        # "get_routed_emails":        get_routed_emails,
+        # "create_routing_rule_voice": create_routing_rule_voice,
+        # "get_email_routing_summary": get_email_routing_summary,
+        # "create_team_voice":        create_team_voice,
+        # # Email Intelligence — DISABLED FOR EMAILCLAW TESTING
+        # "triage_inbox":             triage_inbox,
+        # "get_email_priority_summary": get_email_priority_summary,
+        # "get_scored_emails_list":   get_scored_emails_list,
+        # "get_email_briefing":       get_email_briefing,
+        # "move_email_pipeline":      move_email_pipeline,
+        # "add_contact_tier":         add_contact_tier,
+        # "draft_reply_to_email":     draft_reply_to_email,
+        # # RAG Email Search + Voice Drafts + Split Inbox — DISABLED
+        # "search_email_history":     search_email_history,
+        # "generate_voice_draft":     generate_voice_draft,
+        # "get_split_inbox":          get_split_inbox,
+        # "sync_email_embeddings":    sync_email_embeddings,
+        # ══════════════════════════════════════════════════════════════
+
+        # ══════════════════════════════════════════════════════════════
+        # EMAILCLAW — NEW EMAIL TOOLS
+        # ══════════════════════════════════════════════════════════════
+        "emailclaw_search":          emailclaw_search,
+        "emailclaw_get_thread":      emailclaw_get_thread,
+        "emailclaw_sender_history":  emailclaw_sender_history,
     }
